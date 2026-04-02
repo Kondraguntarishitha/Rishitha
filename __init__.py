@@ -1,67 +1,87 @@
-#
-# Copyright 2009 Facebook
-#
-# Licensed under the Apache License, Version 2.0 (the "License"); you may
-# not use this file except in compliance with the License. You may obtain
-# a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
-# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
-# License for the specific language governing permissions and limitations
-# under the License.
+"""Pillow (Fork of the Python Imaging Library)
 
-"""The Tornado web server and tools."""
+Pillow is the friendly PIL fork by Jeffrey A. Clark and contributors.
+    https://github.com/python-pillow/Pillow/
 
-# version is a human-readable version number.
+Pillow is forked from PIL 1.1.7.
 
-# version_info is a four-tuple for programmatic comparison. The first
-# three numbers are the components of the version number.  The fourth
-# is zero for an official release, positive for a development branch,
-# or negative for a release candidate or beta (after the base version
-# number has been incremented)
-version = "6.5.5"
-version_info = (6, 5, 5, 0)
+PIL is the Python Imaging Library by Fredrik Lundh and contributors.
+Copyright (c) 1999 by Secret Labs AB.
 
-import importlib
-import typing
+Use PIL.__version__ for this Pillow version.
 
-__all__ = [
-    "auth",
-    "autoreload",
-    "concurrent",
-    "curl_httpclient",
-    "escape",
-    "gen",
-    "http1connection",
-    "httpclient",
-    "httpserver",
-    "httputil",
-    "ioloop",
-    "iostream",
-    "locale",
-    "locks",
-    "log",
-    "netutil",
-    "options",
-    "platform",
-    "process",
-    "queues",
-    "routing",
-    "simple_httpclient",
-    "tcpclient",
-    "tcpserver",
-    "template",
-    "testing",
-    "util",
-    "web",
+;-)
+"""
+
+from __future__ import annotations
+
+from . import _version
+
+# VERSION was removed in Pillow 6.0.0.
+# PILLOW_VERSION was removed in Pillow 9.0.0.
+# Use __version__ instead.
+__version__ = _version.__version__
+del _version
+
+
+_plugins = [
+    "AvifImagePlugin",
+    "BlpImagePlugin",
+    "BmpImagePlugin",
+    "BufrStubImagePlugin",
+    "CurImagePlugin",
+    "DcxImagePlugin",
+    "DdsImagePlugin",
+    "EpsImagePlugin",
+    "FitsImagePlugin",
+    "FliImagePlugin",
+    "FpxImagePlugin",
+    "FtexImagePlugin",
+    "GbrImagePlugin",
+    "GifImagePlugin",
+    "GribStubImagePlugin",
+    "Hdf5StubImagePlugin",
+    "IcnsImagePlugin",
+    "IcoImagePlugin",
+    "ImImagePlugin",
+    "ImtImagePlugin",
+    "IptcImagePlugin",
+    "JpegImagePlugin",
+    "Jpeg2KImagePlugin",
+    "McIdasImagePlugin",
+    "MicImagePlugin",
+    "MpegImagePlugin",
+    "MpoImagePlugin",
+    "MspImagePlugin",
+    "PalmImagePlugin",
+    "PcdImagePlugin",
+    "PcxImagePlugin",
+    "PdfImagePlugin",
+    "PixarImagePlugin",
+    "PngImagePlugin",
+    "PpmImagePlugin",
+    "PsdImagePlugin",
+    "QoiImagePlugin",
+    "SgiImagePlugin",
+    "SpiderImagePlugin",
+    "SunImagePlugin",
+    "TgaImagePlugin",
+    "TiffImagePlugin",
+    "WebPImagePlugin",
+    "WmfImagePlugin",
+    "XbmImagePlugin",
+    "XpmImagePlugin",
+    "XVThumbImagePlugin",
 ]
 
 
-# Copied from https://peps.python.org/pep-0562/
-def __getattr__(name: str) -> typing.Any:
-    if name in __all__:
-        return importlib.import_module("." + name, __name__)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+class UnidentifiedImageError(OSError):
+    """
+    Raised in :py:meth:`PIL.Image.open` if an image cannot be opened and identified.
+
+    If a PNG image raises this error, setting :data:`.ImageFile.LOAD_TRUNCATED_IMAGES`
+    to true may allow the image to be opened after all. The setting will ignore missing
+    data and checksum failures.
+    """
+
+    pass
