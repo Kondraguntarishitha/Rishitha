@@ -1,193 +1,194 @@
-from __future__ import annotations
+"""
+https://plot.ly/python/
 
-import typing as _t
+Plotly's Python API allows users to programmatically access Plotly's
+server resources.
 
-from narwhals import dependencies, dtypes, exceptions, selectors
-from narwhals._utils import (
-    Implementation,
-    generate_temporary_column_name,
-    is_ordered_categorical,
-    maybe_align_index,
-    maybe_convert_dtypes,
-    maybe_get_index,
-    maybe_reset_index,
-    maybe_set_index,
-)
-from narwhals.dataframe import DataFrame, LazyFrame
-from narwhals.dtypes import (
-    Array,
-    Binary,
-    Boolean,
-    Categorical,
-    Date,
-    Datetime,
-    Decimal,
-    Duration,
-    Enum,
-    Field,
-    Float32,
-    Float64,
-    Int8,
-    Int16,
-    Int32,
-    Int64,
-    Int128,
-    List,
-    Object,
-    String,
-    Struct,
-    Time,
-    UInt8,
-    UInt16,
-    UInt32,
-    UInt64,
-    UInt128,
-    Unknown,
-)
-from narwhals.expr import Expr
-from narwhals.functions import (
-    all_ as all,
-    all_horizontal,
-    any_horizontal,
-    coalesce,
-    col,
-    concat,
-    concat_str,
-    exclude,
-    format,
-    from_arrow,
-    from_dict,
-    from_dicts,
-    from_numpy,
-    len_ as len,
-    lit,
-    max,
-    max_horizontal,
-    mean,
-    mean_horizontal,
-    median,
-    min,
-    min_horizontal,
-    new_series,
-    nth,
-    read_csv,
-    read_parquet,
-    scan_csv,
-    scan_parquet,
-    show_versions,
-    sum,
-    sum_horizontal,
-    when,
-)
-from narwhals.schema import Schema
-from narwhals.series import Series
-from narwhals.translate import (
-    from_native,
-    get_native_namespace,
-    narwhalify,
-    to_native,
-    to_py_scalar,
-)
+This package is organized as follows:
 
-__version__: str
+Subpackages:
 
-__all__ = [
-    "Array",
-    "Binary",
-    "Boolean",
-    "Categorical",
-    "DataFrame",
-    "Date",
-    "Datetime",
-    "Decimal",
-    "Duration",
-    "Enum",
-    "Expr",
-    "Field",
-    "Float32",
-    "Float64",
-    "Implementation",
-    "Int8",
-    "Int16",
-    "Int32",
-    "Int64",
-    "Int128",
-    "LazyFrame",
-    "List",
-    "Object",
-    "Schema",
-    "Series",
-    "String",
-    "Struct",
-    "Time",
-    "UInt8",
-    "UInt16",
-    "UInt32",
-    "UInt64",
-    "UInt128",
-    "Unknown",
-    "all",
-    "all_horizontal",
-    "any_horizontal",
-    "coalesce",
-    "col",
-    "concat",
-    "concat_str",
-    "dependencies",
-    "dtypes",
-    "exceptions",
-    "exclude",
-    "format",
-    "from_arrow",
-    "from_dict",
-    "from_dicts",
-    "from_native",
-    "from_numpy",
-    "generate_temporary_column_name",
-    "get_native_namespace",
-    "is_ordered_categorical",
-    "len",
-    "lit",
-    "max",
-    "max_horizontal",
-    "maybe_align_index",
-    "maybe_convert_dtypes",
-    "maybe_get_index",
-    "maybe_reset_index",
-    "maybe_set_index",
-    "mean",
-    "mean_horizontal",
-    "median",
-    "min",
-    "min_horizontal",
-    "narwhalify",
-    "new_series",
-    "nth",
-    "read_csv",
-    "read_parquet",
-    "scan_csv",
-    "scan_parquet",
-    "selectors",
-    "show_versions",
-    "sum",
-    "sum_horizontal",
-    "to_native",
-    "to_py_scalar",
-    "when",
-]
+- plotly: all functionality that requires access to Plotly's servers
+
+- graph_objs: objects for designing figures and visualizing data
+
+- matplotlylib: tools to convert matplotlib figures
+
+Modules:
+
+- tools: some helpful tools that do not require access to Plotly's servers
+
+- utils: functions that you probably won't need, but that subpackages use
+
+- version: holds the current API version
+
+- exceptions: defines our custom exception classes
+
+"""
+
+from typing import TYPE_CHECKING
+from _plotly_utils.importers import relative_import
+import importlib.metadata
+
+# This is the version of the plotly package
+__version__ = importlib.metadata.version("plotly")
+version = __version__
+
+if TYPE_CHECKING:
+    from plotly import (
+        graph_objs,
+        tools,
+        utils,
+        offline,
+        colors,
+        io,
+        data,
+    )
+    from plotly.version import __version__
+
+    __all__ = [
+        "graph_objs",
+        "tools",
+        "utils",
+        "offline",
+        "colors",
+        "io",
+        "data",
+        "__version__",
+    ]
+
+    # Set default template (for >= 3.7 this is done in ploty/io/__init__.py)
+    from plotly.io import templates
+
+    templates._default = "plotly"
+else:
+    __all__, __getattr__, __dir__ = relative_import(
+        __name__,
+        [
+            ".graph_objs",
+            ".graph_objects",
+            ".tools",
+            ".utils",
+            ".offline",
+            ".colors",
+            ".io",
+            ".data",
+        ],
+        [".version.__version__"],
+    )
 
 
-if not _t.TYPE_CHECKING:
+def plot(data_frame, kind, **kwargs):
+    """
+    Pandas plotting backend function, not meant to be called directly.
+    To activate, set pandas.options.plotting.backend="plotly"
+    See https://github.com/pandas-dev/pandas/blob/master/pandas/plotting/__init__.py
+    """
+    from .express import (
+        scatter,
+        line,
+        area,
+        bar,
+        box,
+        histogram,
+        violin,
+        strip,
+        funnel,
+        density_contour,
+        density_heatmap,
+        imshow,
+    )
 
-    def __getattr__(name: str) -> _t.Any:
-        if name == "__version__":
-            global __version__  # noqa: PLW0603
+    if kind == "scatter":
+        new_kwargs = {k: kwargs[k] for k in kwargs if k not in ["s", "c"]}
+        return scatter(data_frame, **new_kwargs)
+    if kind == "line":
+        return line(data_frame, **kwargs)
+    if kind == "area":
+        new_kwargs = {k: kwargs[k] for k in kwargs if k not in ["stacked"]}
+        return area(data_frame, **new_kwargs)
+    if kind == "bar":
+        return bar(data_frame, **kwargs)
+    if kind == "barh":
+        return bar(data_frame, orientation="h", **kwargs)
+    if kind == "box":
+        new_kwargs = {k: kwargs[k] for k in kwargs if k not in ["by"]}
+        return box(data_frame, **new_kwargs)
+    if kind in ["hist", "histogram"]:
+        new_kwargs = {k: kwargs[k] for k in kwargs if k not in ["by", "bins"]}
+        return histogram(data_frame, **new_kwargs)
+    if kind == "violin":
+        return violin(data_frame, **kwargs)
+    if kind == "strip":
+        return strip(data_frame, **kwargs)
+    if kind == "funnel":
+        return funnel(data_frame, **kwargs)
+    if kind == "density_contour":
+        return density_contour(data_frame, **kwargs)
+    if kind == "density_heatmap":
+        return density_heatmap(data_frame, **kwargs)
+    if kind == "imshow":
+        return imshow(data_frame, **kwargs)
+    if kind == "heatmap":
+        raise ValueError(
+            "kind='heatmap' not supported plotting.backend='plotly'. "
+            "Please use kind='imshow' or kind='density_heatmap'."
+        )
 
-            from importlib import metadata
+    raise NotImplementedError(
+        "kind='%s' not yet supported for plotting.backend='plotly'" % kind
+    )
 
-            __version__ = metadata.version(__name__)
-            return __version__
-        msg = f"module {__name__!r} has no attribute {name!r}"
-        raise AttributeError(msg)
-else:  # pragma: no cover
-    ...
+
+def boxplot_frame(data_frame, **kwargs):
+    """
+    Pandas plotting backend function, not meant to be called directly.
+    To activate, set pandas.options.plotting.backend="plotly"
+    See https://github.com/pandas-dev/pandas/blob/master/pandas/plotting/__init__.py
+    """
+    from .express import box
+
+    skip = ["by", "column", "ax", "fontsize", "rot", "grid", "figsize", "layout"]
+    skip += ["return_type"]
+    new_kwargs = {k: kwargs[k] for k in kwargs if k not in skip}
+    return box(data_frame, **new_kwargs)
+
+
+def hist_frame(data_frame, **kwargs):
+    """
+    Pandas plotting backend function, not meant to be called directly.
+    To activate, set pandas.options.plotting.backend="plotly"
+    See https://github.com/pandas-dev/pandas/blob/master/pandas/plotting/__init__.py
+    """
+    from .express import histogram
+
+    skip = ["column", "by", "grid", "xlabelsize", "xrot", "ylabelsize", "yrot"]
+    skip += ["ax", "sharex", "sharey", "figsize", "layout", "bins", "legend"]
+    new_kwargs = {k: kwargs[k] for k in kwargs if k not in skip}
+    return histogram(data_frame, **new_kwargs)
+
+
+def hist_series(data_frame, **kwargs):
+    """
+    Pandas plotting backend function, not meant to be called directly.
+    To activate, set pandas.options.plotting.backend="plotly"
+    See https://github.com/pandas-dev/pandas/blob/master/pandas/plotting/__init__.py
+    """
+    from .express import histogram
+
+    skip = ["by", "grid", "xlabelsize", "xrot", "ylabelsize", "yrot", "ax"]
+    skip += ["figsize", "bins", "legend"]
+    new_kwargs = {k: kwargs[k] for k in kwargs if k not in skip}
+    return histogram(data_frame, **new_kwargs)
+
+
+def _jupyter_labextension_paths():
+    """Called by Jupyter Lab Server to detect if it is a valid labextension and
+    to install the extension.
+    """
+    return [
+        {
+            "src": "labextension/static",
+            "dest": "jupyterlab-plotly",
+        }
+    ]
