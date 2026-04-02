@@ -1,279 +1,442 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+"""
+Utility functions for
 
-# Miscellaneous utility code
+- building and importing modules on test time, using a temporary location
+- detecting if compilers are present
+- determining paths to tests
 
-import os
+"""
+import atexit
+import concurrent.futures
 import contextlib
-import functools
-import gc
-import socket
+import glob
+import os
+import shutil
+import subprocess
 import sys
-import textwrap
-import types
-import warnings
+import tempfile
+from importlib import import_module
+from pathlib import Path
 
+import pytest
 
-_DEPR_MSG = (
-    "pyarrow.{} is deprecated as of {}, please use pyarrow.{} instead."
-)
+import numpy
+from numpy._utils import asunicode
+from numpy.f2py._backends._meson import MesonBackend
+from numpy.testing import IS_WASM, temppath
 
+#
+# Check if compilers are available at all...
+#
 
-def doc(*docstrings, **params):
-    """
-    A decorator that takes docstring templates, concatenates them, and finally
-    performs string substitution on them.
-    This decorator will add a variable "_docstring_components" to the wrapped
-    callable to keep track of the original docstring template for potential future use.
-    If the docstring is a template, it will be saved as a string.
-    Otherwise, it will be saved as a callable and the docstring will be obtained via
-    the __doc__ attribute.
-    This decorator cannot be used on Cython classes due to a CPython constraint,
-    which enforces the __doc__ attribute to be read-only.
-    See https://github.com/python/cpython/issues/91309
-
-    Parameters
-    ----------
-    *docstrings : None, str, or callable
-        The string / docstring / docstring template to be prepended in order
-        before the default docstring under the callable.
-    **params
-        The key/value pairs used to format the docstring template.
-    """
-
-    def decorator(decorated):
-        docstring_components = []
-
-        # collect docstrings and docstring templates
-        for docstring in docstrings:
-            if docstring is None:
-                continue
-            if hasattr(docstring, "_docstring_components"):
-                docstring_components.extend(
-                    docstring._docstring_components
+def check_language(lang, code_snippet=None):
+    if sys.platform == "win32":
+        pytest.skip("No Fortran tests on Windows (Issue #25134)", allow_module_level=True)
+    tmpdir = tempfile.mkdtemp()
+    try:
+        meson_file = os.path.join(tmpdir, "meson.build")
+        with open(meson_file, "w") as f:
+            f.write("project('check_compilers')\n")
+            f.write(f"add_languages('{lang}')\n")
+            if code_snippet:
+                f.write(f"{lang}_compiler = meson.get_compiler('{lang}')\n")
+                f.write(f"{lang}_code = '''{code_snippet}'''\n")
+                f.write(
+                    f"_have_{lang}_feature ="
+                    f"{lang}_compiler.compiles({lang}_code,"
+                    f" name: '{lang} feature check')\n"
                 )
-            elif isinstance(docstring, str) or docstring.__doc__:
-                docstring_components.append(docstring)
-
-        # append the callable's docstring last
-        if decorated.__doc__:
-            docstring_components.append(textwrap.dedent(decorated.__doc__))
-
-        params_applied = [
-            component.format(**params)
-            if isinstance(component, str) and len(params) > 0
-            else component
-            for component in docstring_components
-        ]
-
-        decorated.__doc__ = "".join(
-            [
-                component
-                if isinstance(component, str)
-                else textwrap.dedent(component.__doc__ or "")
-                for component in params_applied
-            ]
-        )
-
-        decorated._docstring_components = (
-            docstring_components
-        )
-        return decorated
-
-    return decorator
+        try:
+            runmeson = subprocess.run(
+                ["meson", "setup", "btmp"],
+                check=False,
+                cwd=tmpdir,
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError:
+            pytest.skip("meson not present, skipping compiler dependent test", allow_module_level=True)
+        return runmeson.returncode == 0
+    finally:
+        shutil.rmtree(tmpdir)
 
 
-def _deprecate_api(old_name, new_name, api, next_version, type=FutureWarning):
-    msg = _DEPR_MSG.format(old_name, next_version, new_name)
+fortran77_code = '''
+C Example Fortran 77 code
+      PROGRAM HELLO
+      PRINT *, 'Hello, Fortran 77!'
+      END
+'''
 
-    def wrapper(*args, **kwargs):
-        warnings.warn(msg, type)
-        return api(*args, **kwargs)
+fortran90_code = '''
+! Example Fortran 90 code
+program hello90
+  type :: greeting
+    character(len=20) :: text
+  end type greeting
+
+  type(greeting) :: greet
+  greet%text = 'hello, fortran 90!'
+  print *, greet%text
+end program hello90
+'''
+
+# Dummy class for caching relevant checks
+class CompilerChecker:
+    def __init__(self):
+        self.compilers_checked = False
+        self.has_c = False
+        self.has_f77 = False
+        self.has_f90 = False
+
+    def check_compilers(self):
+        if (not self.compilers_checked) and (not sys.platform == "cygwin"):
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                futures = [
+                    executor.submit(check_language, "c"),
+                    executor.submit(check_language, "fortran", fortran77_code),
+                    executor.submit(check_language, "fortran", fortran90_code)
+                ]
+
+                self.has_c = futures[0].result()
+                self.has_f77 = futures[1].result()
+                self.has_f90 = futures[2].result()
+
+            self.compilers_checked = True
+
+
+if not IS_WASM:
+    checker = CompilerChecker()
+    checker.check_compilers()
+
+def has_c_compiler():
+    return checker.has_c
+
+def has_f77_compiler():
+    return checker.has_f77
+
+def has_f90_compiler():
+    return checker.has_f90
+
+def has_fortran_compiler():
+    return (checker.has_f90 and checker.has_f77)
+
+
+#
+# Maintaining a temporary module directory
+#
+
+_module_dir = None
+_module_num = 5403
+
+if sys.platform == "cygwin":
+    NUMPY_INSTALL_ROOT = Path(__file__).parent.parent.parent
+    _module_list = list(NUMPY_INSTALL_ROOT.glob("**/*.dll"))
+
+
+def _cleanup():
+    global _module_dir
+    if _module_dir is not None:
+        try:
+            sys.path.remove(_module_dir)
+        except ValueError:
+            pass
+        try:
+            shutil.rmtree(_module_dir)
+        except OSError:
+            pass
+        _module_dir = None
+
+
+def get_module_dir():
+    global _module_dir
+    if _module_dir is None:
+        _module_dir = tempfile.mkdtemp()
+        atexit.register(_cleanup)
+        if _module_dir not in sys.path:
+            sys.path.insert(0, _module_dir)
+    return _module_dir
+
+
+def get_temp_module_name():
+    # Assume single-threaded, and the module dir usable only by this thread
+    global _module_num
+    get_module_dir()
+    name = "_test_ext_module_%d" % _module_num
+    _module_num += 1
+    if name in sys.modules:
+        # this should not be possible, but check anyway
+        raise RuntimeError("Temporary module name already in use.")
+    return name
+
+
+def _memoize(func):
+    memo = {}
+
+    def wrapper(*a, **kw):
+        key = repr((a, kw))
+        if key not in memo:
+            try:
+                memo[key] = func(*a, **kw)
+            except Exception as e:
+                memo[key] = e
+                raise
+        ret = memo[key]
+        if isinstance(ret, Exception):
+            raise ret
+        return ret
+
+    wrapper.__name__ = func.__name__
     return wrapper
 
 
-def _deprecate_class(old_name, new_class, next_version,
-                     instancecheck=True):
+#
+# Building modules
+#
+
+
+@_memoize
+def build_module(source_files, options=[], skip=[], only=[], module_name=None):
     """
-    Raise warning if a deprecated class is used in an isinstance check.
+    Compile and import a f2py module, built from the given files.
+
     """
-    class _DeprecatedMeta(type):
-        def __instancecheck__(self, other):
-            warnings.warn(
-                _DEPR_MSG.format(old_name, next_version, new_class.__name__),
-                FutureWarning,
-                stacklevel=2
+
+    code = f"import sys; sys.path = {sys.path!r}; import numpy.f2py; numpy.f2py.main()"
+
+    d = get_module_dir()
+    # gh-27045 : Skip if no compilers are found
+    if not has_fortran_compiler():
+        pytest.skip("No Fortran compiler available")
+
+    # Copy files
+    dst_sources = []
+    f2py_sources = []
+    for fn in source_files:
+        if not os.path.isfile(fn):
+            raise RuntimeError(f"{fn} is not a file")
+        dst = os.path.join(d, os.path.basename(fn))
+        shutil.copyfile(fn, dst)
+        dst_sources.append(dst)
+
+        base, ext = os.path.splitext(dst)
+        if ext in (".f90", ".f95", ".f", ".c", ".pyf"):
+            f2py_sources.append(dst)
+
+    assert f2py_sources
+
+    # Prepare options
+    if module_name is None:
+        module_name = get_temp_module_name()
+    gil_options = []
+    if '--freethreading-compatible' not in options and '--no-freethreading-compatible' not in options:
+        # default to disabling the GIL if unset in options
+        gil_options = ['--freethreading-compatible']
+    f2py_opts = ["-c", "-m", module_name] + options + gil_options + f2py_sources
+    f2py_opts += ["--backend", "meson"]
+    if skip:
+        f2py_opts += ["skip:"] + skip
+    if only:
+        f2py_opts += ["only:"] + only
+
+    # Build
+    cwd = os.getcwd()
+    try:
+        os.chdir(d)
+        cmd = [sys.executable, "-c", code] + f2py_opts
+        p = subprocess.Popen(cmd,
+                             stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT)
+        out, err = p.communicate()
+        if p.returncode != 0:
+            raise RuntimeError(f"Running f2py failed: {cmd[4:]}\n{asunicode(out)}")
+    finally:
+        os.chdir(cwd)
+
+        # Partial cleanup
+        for fn in dst_sources:
+            os.unlink(fn)
+
+    # Rebase (Cygwin-only)
+    if sys.platform == "cygwin":
+        # If someone starts deleting modules after import, this will
+        # need to change to record how big each module is, rather than
+        # relying on rebase being able to find that from the files.
+        _module_list.extend(
+            glob.glob(os.path.join(d, f"{module_name:s}*"))
+        )
+        subprocess.check_call(
+            ["/usr/bin/rebase", "--database", "--oblivious", "--verbose"]
+            + _module_list
+        )
+
+    # Import
+    return import_module(module_name)
+
+
+@_memoize
+def build_code(source_code,
+               options=[],
+               skip=[],
+               only=[],
+               suffix=None,
+               module_name=None):
+    """
+    Compile and import Fortran code using f2py.
+
+    """
+    if suffix is None:
+        suffix = ".f"
+    with temppath(suffix=suffix) as path:
+        with open(path, "w") as f:
+            f.write(source_code)
+        return build_module([path],
+                            options=options,
+                            skip=skip,
+                            only=only,
+                            module_name=module_name)
+
+
+#
+# Building with meson
+#
+
+
+class SimplifiedMesonBackend(MesonBackend):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def compile(self):
+        self.write_meson_build(self.build_dir)
+        self.run_meson(self.build_dir)
+
+
+def build_meson(source_files, module_name=None, **kwargs):
+    """
+    Build a module via Meson and import it.
+    """
+
+    # gh-27045 : Skip if no compilers are found
+    if not has_fortran_compiler():
+        pytest.skip("No Fortran compiler available")
+
+    build_dir = get_module_dir()
+    if module_name is None:
+        module_name = get_temp_module_name()
+
+    # Initialize the MesonBackend
+    backend = SimplifiedMesonBackend(
+        modulename=module_name,
+        sources=source_files,
+        extra_objects=kwargs.get("extra_objects", []),
+        build_dir=build_dir,
+        include_dirs=kwargs.get("include_dirs", []),
+        library_dirs=kwargs.get("library_dirs", []),
+        libraries=kwargs.get("libraries", []),
+        define_macros=kwargs.get("define_macros", []),
+        undef_macros=kwargs.get("undef_macros", []),
+        f2py_flags=kwargs.get("f2py_flags", []),
+        sysinfo_flags=kwargs.get("sysinfo_flags", []),
+        fc_flags=kwargs.get("fc_flags", []),
+        flib_flags=kwargs.get("flib_flags", []),
+        setup_flags=kwargs.get("setup_flags", []),
+        remove_build_dir=kwargs.get("remove_build_dir", False),
+        extra_dat=kwargs.get("extra_dat", {}),
+    )
+
+    backend.compile()
+
+    # Import the compiled module
+    sys.path.insert(0, f"{build_dir}/{backend.meson_build_dir}")
+    return import_module(module_name)
+
+
+#
+# Unittest convenience
+#
+
+
+class F2PyTest:
+    code = None
+    sources = None
+    options = []
+    skip = []
+    only = []
+    suffix = ".f"
+    module = None
+    _has_c_compiler = None
+    _has_f77_compiler = None
+    _has_f90_compiler = None
+
+    @property
+    def module_name(self):
+        cls = type(self)
+        return f'_{cls.__module__.rsplit(".", 1)[-1]}_{cls.__name__}_ext_module'
+
+    @classmethod
+    def setup_class(cls):
+        if sys.platform == "win32":
+            pytest.skip("Fails with MinGW64 Gfortran (Issue #9673)")
+        F2PyTest._has_c_compiler = has_c_compiler()
+        F2PyTest._has_f77_compiler = has_f77_compiler()
+        F2PyTest._has_f90_compiler = has_f90_compiler()
+        F2PyTest._has_fortran_compiler = has_fortran_compiler()
+
+    def setup_method(self):
+        if self.module is not None:
+            return
+
+        codes = self.sources or []
+        if self.code:
+            codes.append(self.suffix)
+
+        needs_f77 = any(str(fn).endswith(".f") for fn in codes)
+        needs_f90 = any(str(fn).endswith(".f90") for fn in codes)
+        needs_pyf = any(str(fn).endswith(".pyf") for fn in codes)
+
+        if needs_f77 and not self._has_f77_compiler:
+            pytest.skip("No Fortran 77 compiler available")
+        if needs_f90 and not self._has_f90_compiler:
+            pytest.skip("No Fortran 90 compiler available")
+        if needs_pyf and not self._has_fortran_compiler:
+            pytest.skip("No Fortran compiler available")
+
+        # Build the module
+        if self.code is not None:
+            self.module = build_code(
+                self.code,
+                options=self.options,
+                skip=self.skip,
+                only=self.only,
+                suffix=self.suffix,
+                module_name=self.module_name,
             )
-            return isinstance(other, new_class)
 
-    return _DeprecatedMeta(old_name, (new_class,), {})
+        if self.sources is not None:
+            self.module = build_module(
+                self.sources,
+                options=self.options,
+                skip=self.skip,
+                only=self.only,
+                module_name=self.module_name,
+            )
 
 
-def _is_iterable(obj):
+#
+# Helper functions
+#
+
+
+def getpath(*a):
+    # Package root
+    d = Path(numpy.f2py.__file__).parent.resolve()
+    return d.joinpath(*a)
+
+
+@contextlib.contextmanager
+def switchdir(path):
+    curpath = Path.cwd()
+    os.chdir(path)
     try:
-        iter(obj)
-        return True
-    except TypeError:
-        return False
-
-
-def _is_path_like(path):
-    return isinstance(path, str) or hasattr(path, '__fspath__')
-
-
-def _stringify_path(path):
-    """
-    Convert *path* to a string or unicode path if possible.
-    """
-    if isinstance(path, str):
-        return os.path.expanduser(path)
-
-    # checking whether path implements the filesystem protocol
-    try:
-        return os.path.expanduser(path.__fspath__())
-    except AttributeError:
-        pass
-
-    raise TypeError("not a path-like object")
-
-
-def product(seq):
-    """
-    Return a product of sequence items.
-    """
-    return functools.reduce(lambda a, b: a*b, seq, 1)
-
-
-def get_contiguous_span(shape, strides, itemsize):
-    """
-    Return a contiguous span of N-D array data.
-
-    Parameters
-    ----------
-    shape : tuple
-    strides : tuple
-    itemsize : int
-      Specify array shape data
-
-    Returns
-    -------
-    start, end : int
-      The span end points.
-    """
-    if not strides:
-        start = 0
-        end = itemsize * product(shape)
-    else:
-        start = 0
-        end = itemsize
-        for i, dim in enumerate(shape):
-            if dim == 0:
-                start = end = 0
-                break
-            stride = strides[i]
-            if stride > 0:
-                end += stride * (dim - 1)
-            elif stride < 0:
-                start += stride * (dim - 1)
-        if end - start != itemsize * product(shape):
-            raise ValueError('array data is non-contiguous')
-    return start, end
-
-
-def find_free_port():
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    with contextlib.closing(sock) as sock:
-        sock.bind(('', 0))
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        return sock.getsockname()[1]
-
-
-def guid():
-    from uuid import uuid4
-    return uuid4().hex
-
-
-def _break_traceback_cycle_from_frame(frame):
-    # Clear local variables in all inner frames, so as to break the
-    # reference cycle.
-    this_frame = sys._getframe(0)
-    refs = gc.get_referrers(frame)
-    while refs:
-        for frame in refs:
-            if frame is not this_frame and isinstance(frame, types.FrameType):
-                break
-        else:
-            # No frame found in referrers (finished?)
-            break
-        refs = None
-        # Clear the frame locals, to try and break the cycle (it is
-        # somewhere along the chain of execution frames).
-        frame.clear()
-        # To visit the inner frame, we need to find it among the
-        # referrers of this frame (while `frame.f_back` would let
-        # us visit the outer frame).
-        refs = gc.get_referrers(frame)
-    refs = frame = this_frame = None
-
-
-def _download_urllib(url, out_path):
-    from urllib.request import urlopen, Request
-    req = Request(url, headers={'User-Agent': 'pyarrow'})
-    with urlopen(req) as response:
-        with open(out_path, 'wb') as f:
-            f.write(response.read())
-
-
-def _download_requests(url, out_path):
-    import requests
-    with requests.get(url) as response:
-        with open(out_path, 'wb') as f:
-            f.write(response.content)
-
-
-def download_tzdata_on_windows():
-    r"""
-    Download and extract latest IANA timezone database into the
-    location expected by Arrow which is %USERPROFILE%\Downloads\tzdata.
-    """
-    if sys.platform != 'win32':
-        raise TypeError(f"Timezone database is already provided by {sys.platform}")
-
-    import tarfile
-
-    tzdata_url = "https://data.iana.org/time-zones/tzdata-latest.tar.gz"
-    tzdata_path = os.path.expandvars(r"%USERPROFILE%\Downloads\tzdata")
-    tzdata_compressed_path = os.path.join(tzdata_path, "tzdata.tar.gz")
-    windows_zones_url = "https://raw.githubusercontent.com/unicode-org/cldr/master/common/supplemental/windowsZones.xml"  # noqa
-    windows_zones_path = os.path.join(tzdata_path, "windowsZones.xml")
-    os.makedirs(tzdata_path, exist_ok=True)
-
-    # Try to download the files with requests and then fall back to urllib. This
-    # works around possible issues in certain older environment (GH-45295)
-    try:
-        import requests  # noqa: F401
-        download_fn = _download_requests
-    except ImportError:
-        download_fn = _download_urllib
-
-    download_fn(tzdata_url, tzdata_compressed_path)
-    download_fn(windows_zones_url, windows_zones_path)
-
-    assert os.path.exists(tzdata_compressed_path)
-    assert os.path.exists(windows_zones_path)
-
-    tarfile.open(tzdata_compressed_path).extractall(tzdata_path)
+        yield
+    finally:
+        os.chdir(curpath)
