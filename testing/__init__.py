@@ -1,22 +1,6 @@
-"""Common test support for all numpy test scripts.
+from __future__ import annotations
 
-This single module should provide all the common functionality for numpy tests
-in a single location, so that test scripts can just import it and work right
-away.
+from narwhals.testing.asserts.frame import assert_frame_equal
+from narwhals.testing.asserts.series import assert_series_equal
 
-"""
-from unittest import TestCase
-
-from . import _private, overrides
-from ._private import extbuild
-from ._private.utils import *
-from ._private.utils import _assert_valid_refcount, _gen_alignment_data
-
-__all__ = (
-    _private.utils.__all__ + ['TestCase', 'overrides']
-)
-
-from numpy._pytesttester import PytestTester
-
-test = PytestTester(__name__)
-del PytestTester
+__all__ = ("assert_frame_equal", "assert_series_equal")
