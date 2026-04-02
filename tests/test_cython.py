@@ -1,203 +1,367 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
-
 import os
-import shutil
 import subprocess
 import sys
+import sysconfig
+from datetime import datetime
 
 import pytest
 
-import pyarrow as pa
-import pyarrow.tests.util as test_util
+import numpy as np
+from numpy.testing import IS_EDITABLE, IS_WASM, assert_array_equal
 
-here = os.path.dirname(os.path.abspath(__file__))
-test_ld_path = os.environ.get('PYARROW_TEST_LD_PATH', '')
-if os.name == 'posix':
-    compiler_opts = ['-std=c++20']
-elif os.name == 'nt':
-    compiler_opts = ['-D_ENABLE_EXTENDED_ALIGNED_STORAGE', '/std:c++20']
+# This import is copied from random.tests.test_extending
+try:
+    import cython
+    from Cython.Compiler.Version import version as cython_version
+except ImportError:
+    cython = None
 else:
-    compiler_opts = []
+    from numpy._utils import _pep440
 
-setup_template = """if 1:
-    from setuptools import setup
-    from Cython.Build import cythonize
+    # Note: keep in sync with the one in pyproject.toml
+    required_version = "3.0.6"
+    if _pep440.parse(cython_version) < _pep440.Version(required_version):
+        # too old or wrong cython, skip the test
+        cython = None
 
-    import numpy as np
+pytestmark = pytest.mark.skipif(cython is None, reason="requires cython")
 
-    import pyarrow as pa
 
-    ext_modules = cythonize({pyx_file!r})
-    compiler_opts = {compiler_opts!r}
-    custom_ld_path = {test_ld_path!r}
-
-    for ext in ext_modules:
-        # XXX required for numpy/numpyconfig.h,
-        # included from arrow/python/api.h
-        ext.include_dirs.append(np.get_include())
-        ext.include_dirs.append(pa.get_include())
-        ext.libraries.extend(pa.get_libraries())
-        ext.library_dirs.extend(pa.get_library_dirs())
-        if custom_ld_path:
-            ext.library_dirs.append(custom_ld_path)
-        ext.extra_compile_args.extend(compiler_opts)
-        print("Extension module:",
-              ext, ext.include_dirs, ext.libraries, ext.library_dirs)
-
-    setup(
-        ext_modules=ext_modules,
+if IS_EDITABLE:
+    pytest.skip(
+        "Editable install doesn't support tests with a compile step",
+        allow_module_level=True
     )
-"""
 
 
-def check_cython_example_module(mod):
-    arr = pa.array([1, 2, 3])
-    assert mod.get_array_length(arr) == 3
-    with pytest.raises(TypeError, match="not an array"):
-        mod.get_array_length(None)
+@pytest.fixture(scope='module')
+def install_temp(tmpdir_factory):
+    # Based in part on test_cython from random.tests.test_extending
+    if IS_WASM:
+        pytest.skip("No subprocess")
 
-    scal = pa.scalar(123)
-    cast_scal = mod.cast_scalar(scal, pa.utf8())
-    assert cast_scal == pa.scalar("123")
-    with pytest.raises(NotImplementedError,
-                       match="Unsupported cast from int64 to list using function "
-                             "cast_list"):
-        mod.cast_scalar(scal, pa.list_(pa.int64()))
+    srcdir = os.path.join(os.path.dirname(__file__), 'examples', 'cython')
+    build_dir = tmpdir_factory.mktemp("cython_test") / "build"
+    os.makedirs(build_dir, exist_ok=True)
+    # Ensure we use the correct Python interpreter even when `meson` is
+    # installed in a different Python environment (see gh-24956)
+    native_file = str(build_dir / 'interpreter-native-file.ini')
+    with open(native_file, 'w') as f:
+        f.write("[binaries]\n")
+        f.write(f"python = '{sys.executable}'\n")
+        f.write(f"python3 = '{sys.executable}'")
 
+    try:
+        subprocess.check_call(["meson", "--version"])
+    except FileNotFoundError:
+        pytest.skip("No usable 'meson' found")
+    if sysconfig.get_platform() == "win-arm64":
+        pytest.skip("Meson unable to find MSVC linker on win-arm64")
+    if sys.platform == "win32":
+        subprocess.check_call(["meson", "setup",
+                               "--buildtype=release",
+                               "--vsenv", "--native-file", native_file,
+                               str(srcdir)],
+                              cwd=build_dir,
+                              )
+    else:
+        subprocess.check_call(["meson", "setup",
+                               "--native-file", native_file, str(srcdir)],
+                              cwd=build_dir
+                              )
+    try:
+        subprocess.check_call(["meson", "compile", "-vv"], cwd=build_dir)
+    except subprocess.CalledProcessError:
+        print("----------------")
+        print("meson build failed when doing")
+        print(f"'meson setup --native-file {native_file} {srcdir}'")
+        print("'meson compile -vv'")
+        print(f"in {build_dir}")
+        print("----------------")
+        raise
 
-# NumPy is still a required build dependency. It is present in our
-# headers and is required to build for the cython tests.
-@pytest.mark.numpy
-@pytest.mark.cython
-def test_cython_api(tmpdir):
-    """
-    Basic test for the Cython API.
-    """
-    # Fail early if cython is not found
-    import cython  # noqa
-
-    with tmpdir.as_cwd():
-        # Set up temporary workspace
-        pyx_file = 'pyarrow_cython_example.pyx'
-        shutil.copyfile(os.path.join(here, pyx_file),
-                        os.path.join(str(tmpdir), pyx_file))
-        # Create setup.py file
-        setup_code = setup_template.format(pyx_file=pyx_file,
-                                           compiler_opts=compiler_opts,
-                                           test_ld_path=test_ld_path)
-        with open('setup.py', 'w') as f:
-            f.write(setup_code)
-
-        # ARROW-2263: Make environment with this pyarrow/ package first on the
-        # PYTHONPATH, for local dev environments
-        subprocess_env = test_util.get_modified_env_with_pythonpath()
-
-        # Compile extension module
-        subprocess.check_call([sys.executable, 'setup.py',
-                               'build_ext', '--inplace'],
-                              env=subprocess_env)
-
-        # Check basic functionality
-        orig_path = sys.path[:]
-        sys.path.insert(0, str(tmpdir))
-        try:
-            mod = __import__('pyarrow_cython_example')
-            check_cython_example_module(mod)
-        finally:
-            sys.path = orig_path
-
-        # Check the extension module is loadable from a subprocess without
-        # pyarrow imported first.
-        code = f"""if 1:
-            import sys
-            import os
-
-            try:
-                # Add dll directory was added on python 3.8
-                # and is required in order to find extra DLLs
-                # only for win32
-                for dir in {pa.get_library_dirs()}:
-                    os.add_dll_directory(dir)
-            except AttributeError:
-                pass
-
-            mod = __import__('pyarrow_cython_example')
-            arr = mod.make_null_array(5)
-            assert mod.get_array_length(arr) == 5
-            assert arr.null_count == 5
-        """
-
-        path_var = None
-        if sys.platform == 'win32':
-            if not hasattr(os, 'add_dll_directory'):
-                # Python 3.8 onwards don't check extension module DLLs on path
-                # we have to use os.add_dll_directory instead.
-                delim, path_var = ';', 'PATH'
-        elif sys.platform == 'darwin':
-            delim, path_var = ':', 'DYLD_LIBRARY_PATH'
-        else:
-            delim, path_var = ':', 'LD_LIBRARY_PATH'
-
-        if path_var:
-            paths = sys.path
-            paths += pa.get_library_dirs()
-            paths += [subprocess_env.get(path_var, '')]
-            paths = [path for path in paths if path]
-            subprocess_env[path_var] = delim.join(paths)
-        subprocess.check_call([sys.executable, '-c', code],
-                              stdout=subprocess.PIPE,
-                              env=subprocess_env)
+    sys.path.append(str(build_dir))
 
 
-@pytest.mark.numpy
-@pytest.mark.cython
-def test_visit_strings(tmpdir):
-    with tmpdir.as_cwd():
-        # Set up temporary workspace
-        pyx_file = 'bound_function_visit_strings.pyx'
-        shutil.copyfile(os.path.join(here, pyx_file),
-                        os.path.join(str(tmpdir), pyx_file))
-        # Create setup.py file
-        setup_code = setup_template.format(pyx_file=pyx_file,
-                                           compiler_opts=compiler_opts,
-                                           test_ld_path=test_ld_path)
-        with open('setup.py', 'w') as f:
-            f.write(setup_code)
+def test_is_timedelta64_object(install_temp):
+    import checks
 
-        subprocess_env = test_util.get_modified_env_with_pythonpath()
+    assert checks.is_td64(np.timedelta64(1234))
+    assert checks.is_td64(np.timedelta64(1234, "ns"))
+    assert checks.is_td64(np.timedelta64("NaT", "ns"))
 
-        # Compile extension module
-        subprocess.check_call([sys.executable, 'setup.py',
-                               'build_ext', '--inplace'],
-                              env=subprocess_env)
+    assert not checks.is_td64(1)
+    assert not checks.is_td64(None)
+    assert not checks.is_td64("foo")
+    assert not checks.is_td64(np.datetime64("now", "s"))
 
-    sys.path.insert(0, str(tmpdir))
-    mod = __import__('bound_function_visit_strings')
 
-    strings = ['a', 'b', 'c']
-    visited = []
-    mod._visit_strings(strings, visited.append)
+def test_is_datetime64_object(install_temp):
+    import checks
 
-    assert visited == strings
+    assert checks.is_dt64(np.datetime64(1234, "ns"))
+    assert checks.is_dt64(np.datetime64("NaT", "ns"))
 
-    with pytest.raises(ValueError, match="wtf"):
-        def raise_on_b(s):
-            if s == 'b':
-                raise ValueError('wtf')
+    assert not checks.is_dt64(1)
+    assert not checks.is_dt64(None)
+    assert not checks.is_dt64("foo")
+    assert not checks.is_dt64(np.timedelta64(1234))
 
-        mod._visit_strings(strings, raise_on_b)
+
+def test_get_datetime64_value(install_temp):
+    import checks
+
+    dt64 = np.datetime64("2016-01-01", "ns")
+
+    result = checks.get_dt64_value(dt64)
+    expected = dt64.view("i8")
+
+    assert result == expected
+
+
+def test_get_timedelta64_value(install_temp):
+    import checks
+
+    td64 = np.timedelta64(12345, "h")
+
+    result = checks.get_td64_value(td64)
+    expected = td64.view("i8")
+
+    assert result == expected
+
+
+def test_get_datetime64_unit(install_temp):
+    import checks
+
+    dt64 = np.datetime64("2016-01-01", "ns")
+    result = checks.get_dt64_unit(dt64)
+    expected = 10
+    assert result == expected
+
+    td64 = np.timedelta64(12345, "h")
+    result = checks.get_dt64_unit(td64)
+    expected = 5
+    assert result == expected
+
+
+def test_abstract_scalars(install_temp):
+    import checks
+
+    assert checks.is_integer(1)
+    assert checks.is_integer(np.int8(1))
+    assert checks.is_integer(np.uint64(1))
+
+def test_default_int(install_temp):
+    import checks
+
+    assert checks.get_default_integer() is np.dtype(int)
+
+
+def test_ravel_axis(install_temp):
+    import checks
+
+    assert checks.get_ravel_axis() == np.iinfo("intc").min
+
+
+def test_convert_datetime64_to_datetimestruct(install_temp):
+    # GH#21199
+    import checks
+
+    res = checks.convert_datetime64_to_datetimestruct()
+
+    exp = {
+        "year": 2022,
+        "month": 3,
+        "day": 15,
+        "hour": 20,
+        "min": 1,
+        "sec": 55,
+        "us": 260292,
+        "ps": 0,
+        "as": 0,
+    }
+
+    assert res == exp
+
+
+class TestDatetimeStrings:
+    def test_make_iso_8601_datetime(self, install_temp):
+        # GH#21199
+        import checks
+        dt = datetime(2016, 6, 2, 10, 45, 19)
+        # uses NPY_FR_s
+        result = checks.make_iso_8601_datetime(dt)
+        assert result == b"2016-06-02T10:45:19"
+
+    def test_get_datetime_iso_8601_strlen(self, install_temp):
+        # GH#21199
+        import checks
+        # uses NPY_FR_ns
+        res = checks.get_datetime_iso_8601_strlen()
+        assert res == 48
+
+
+@pytest.mark.parametrize(
+    "arrays",
+    [
+        [np.random.rand(2)],
+        [np.random.rand(2), np.random.rand(3, 1)],
+        [np.random.rand(2), np.random.rand(2, 3, 2), np.random.rand(1, 3, 2)],
+        [np.random.rand(2, 1)] * 4 + [np.random.rand(1, 1, 1)],
+    ]
+)
+def test_multiiter_fields(install_temp, arrays):
+    import checks
+    bcast = np.broadcast(*arrays)
+
+    assert bcast.ndim == checks.get_multiiter_number_of_dims(bcast)
+    assert bcast.size == checks.get_multiiter_size(bcast)
+    assert bcast.numiter == checks.get_multiiter_num_of_iterators(bcast)
+    assert bcast.shape == checks.get_multiiter_shape(bcast)
+    assert bcast.index == checks.get_multiiter_current_index(bcast)
+    assert all(
+        x.base is y.base
+        for x, y in zip(bcast.iters, checks.get_multiiter_iters(bcast))
+    )
+
+
+def test_dtype_flags(install_temp):
+    import checks
+    dtype = np.dtype("i,O")  # dtype with somewhat interesting flags
+    assert dtype.flags == checks.get_dtype_flags(dtype)
+
+
+def test_conv_intp(install_temp):
+    import checks
+
+    class myint:
+        def __int__(self):
+            return 3
+
+    # These conversion passes via `__int__`, not `__index__`:
+    assert checks.conv_intp(3.) == 3
+    assert checks.conv_intp(myint()) == 3
+
+
+def test_npyiter_api(install_temp):
+    import checks
+    arr = np.random.rand(3, 2)
+
+    it = np.nditer(arr)
+    assert checks.get_npyiter_size(it) == it.itersize == np.prod(arr.shape)
+    assert checks.get_npyiter_ndim(it) == it.ndim == 1
+    assert checks.npyiter_has_index(it) == it.has_index == False
+
+    it = np.nditer(arr, flags=["c_index"])
+    assert checks.npyiter_has_index(it) == it.has_index == True
+    assert (
+        checks.npyiter_has_delayed_bufalloc(it)
+        == it.has_delayed_bufalloc
+        == False
+    )
+
+    it = np.nditer(arr, flags=["buffered", "delay_bufalloc"])
+    assert (
+        checks.npyiter_has_delayed_bufalloc(it)
+        == it.has_delayed_bufalloc
+        == True
+    )
+
+    it = np.nditer(arr, flags=["multi_index"])
+    assert checks.get_npyiter_size(it) == it.itersize == np.prod(arr.shape)
+    assert checks.npyiter_has_multi_index(it) == it.has_multi_index == True
+    assert checks.get_npyiter_ndim(it) == it.ndim == 2
+    assert checks.test_get_multi_index_iter_next(it, arr)
+
+    arr2 = np.random.rand(2, 1, 2)
+    it = np.nditer([arr, arr2])
+    assert checks.get_npyiter_nop(it) == it.nop == 2
+    assert checks.get_npyiter_size(it) == it.itersize == 12
+    assert checks.get_npyiter_ndim(it) == it.ndim == 3
+    assert all(
+        x is y for x, y in zip(checks.get_npyiter_operands(it), it.operands)
+    )
+    assert all(
+        np.allclose(x, y)
+        for x, y in zip(checks.get_npyiter_itviews(it), it.itviews)
+    )
+
+
+def test_fillwithbytes(install_temp):
+    import checks
+
+    arr = checks.compile_fillwithbyte()
+    assert_array_equal(arr, np.ones((1, 2)))
+
+
+def test_complex(install_temp):
+    from checks import inc2_cfloat_struct
+
+    arr = np.array([0, 10 + 10j], dtype="F")
+    inc2_cfloat_struct(arr)
+    assert arr[1] == (12 + 12j)
+
+
+def test_npystring_pack(install_temp):
+    """Check that the cython API can write to a vstring array."""
+    import checks
+
+    arr = np.array(['a', 'b', 'c'], dtype='T')
+    assert checks.npystring_pack(arr) == 0
+
+    # checks.npystring_pack writes to the beginning of the array
+    assert arr[0] == "Hello world"
+
+def test_npystring_load(install_temp):
+    """Check that the cython API can load strings from a vstring array."""
+    import checks
+
+    arr = np.array(['abcd', 'b', 'c'], dtype='T')
+    result = checks.npystring_load(arr)
+    assert result == 'abcd'
+
+
+def test_npystring_multiple_allocators(install_temp):
+    """Check that the cython API can acquire/release multiple vstring allocators."""
+    import checks
+
+    dt = np.dtypes.StringDType(na_object=None)
+    arr1 = np.array(['abcd', 'b', 'c'], dtype=dt)
+    arr2 = np.array(['a', 'b', 'c'], dtype=dt)
+
+    assert checks.npystring_pack_multiple(arr1, arr2) == 0
+    assert arr1[0] == "Hello world"
+    assert arr1[-1] is None
+    assert arr2[0] == "test this"
+
+
+def test_npystring_allocators_other_dtype(install_temp):
+    """Check that allocators for non-StringDType arrays is NULL."""
+    import checks
+
+    arr1 = np.array([1, 2, 3], dtype='i')
+    arr2 = np.array([4, 5, 6], dtype='i')
+
+    assert checks.npystring_allocators_other_types(arr1, arr2) == 0
+
+
+@pytest.mark.skipif(sysconfig.get_platform() == 'win-arm64',
+                    reason='no checks module on win-arm64')
+def test_npy_uintp_type_enum(install_temp):
+    import checks
+    assert checks.check_npy_uintp_type_enum()
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 14),
+    reason="Tests behavior that happens on Python 3.14 and newer"
+)
+@pytest.mark.skipif(
+    sysconfig.get_platform() == 'win-arm64',
+    reason='no checks module on win-arm64'
+)
+def test_resize_refcheck(install_temp):
+    import checks
+    msg = "It is possible that this is a false positive."
+    with pytest.raises(ValueError, match=msg):
+        checks.resize_refcheck_test()

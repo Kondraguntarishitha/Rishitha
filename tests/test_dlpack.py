@@ -1,174 +1,190 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+import sys
 
-import ctypes
-from functools import wraps
-import gc
 import pytest
 
-import pyarrow as pa
-from pyarrow.vendored.version import Version
-
-# Marks all of the tests in this module
-# Ignore these with pytest ... -m 'not numpy'
-pytestmark = pytest.mark.numpy
-np = pytest.importorskip("numpy")
+import numpy as np
+from numpy.testing import IS_PYPY, assert_array_equal
 
 
-def PyCapsule_IsValid(capsule, name):
-    return ctypes.pythonapi.PyCapsule_IsValid(ctypes.py_object(capsule), name) == 1
+def new_and_old_dlpack():
+    yield np.arange(5)
+
+    class OldDLPack(np.ndarray):
+        # Support only the "old" version
+        def __dlpack__(self, stream=None):
+            return super().__dlpack__(stream=None)
+
+    yield np.arange(5).view(OldDLPack)
 
 
-def check_dlpack_export(arr, expected_arr):
-    DLTensor = arr.__dlpack__()
-    assert PyCapsule_IsValid(DLTensor, b"dltensor") is True
+class TestDLPack:
+    @pytest.mark.skipif(IS_PYPY, reason="PyPy can't get refcounts.")
+    @pytest.mark.parametrize("max_version", [(0, 0), None, (1, 0), (100, 3)])
+    def test_dunder_dlpack_refcount(self, max_version):
+        x = np.arange(5)
+        y = x.__dlpack__(max_version=max_version)
+        startcount = sys.getrefcount(x)
+        del y
+        assert startcount - sys.getrefcount(x) == 1
 
-    result = np.from_dlpack(arr)
-    np.testing.assert_array_equal(result, expected_arr, strict=True)
+    def test_dunder_dlpack_stream(self):
+        x = np.arange(5)
+        x.__dlpack__(stream=None)
 
-    assert arr.__dlpack_device__() == (1, 0)
+        with pytest.raises(RuntimeError):
+            x.__dlpack__(stream=1)
 
+    def test_dunder_dlpack_copy(self):
+        # Checks the argument parsing of __dlpack__ explicitly.
+        # Honoring the flag is tested in the from_dlpack round-tripping test.
+        x = np.arange(5)
+        x.__dlpack__(copy=True)
+        x.__dlpack__(copy=None)
+        x.__dlpack__(copy=False)
 
-def check_bytes_allocated(f):
-    @wraps(f)
-    def wrapper(*args, **kwargs):
-        gc.collect()
-        allocated_bytes = pa.total_allocated_bytes()
-        try:
-            return f(*args, **kwargs)
-        finally:
-            assert pa.total_allocated_bytes() == allocated_bytes
-    return wrapper
+        with pytest.raises(ValueError):
+            # NOTE: The copy converter should be stricter, but not just here.
+            x.__dlpack__(copy=np.array([1, 2, 3]))
 
+    def test_strides_not_multiple_of_itemsize(self):
+        dt = np.dtype([('int', np.int32), ('char', np.int8)])
+        y = np.zeros((5,), dtype=dt)
+        z = y['int']
 
-@check_bytes_allocated
-@pytest.mark.parametrize(
-    ('value_type', 'np_type_str'),
-    [
-        (pa.uint8(), "uint8"),
-        (pa.uint16(), "uint16"),
-        (pa.uint32(), "uint32"),
-        (pa.uint64(), "uint64"),
-        (pa.int8(), "int8"),
-        (pa.int16(), "int16"),
-        (pa.int32(), "int32"),
-        (pa.int64(), "int64"),
-        (pa.float16(), "float16"),
-        (pa.float32(), "float32"),
-        (pa.float64(), "float64"),
-    ]
-)
-def test_dlpack(value_type, np_type_str):
-    if Version(np.__version__) < Version("1.24.0"):
-        pytest.skip("No dlpack support in numpy versions older than 1.22.0, "
-                    "strict keyword in assert_array_equal added in numpy version "
-                    "1.24.0")
+        with pytest.raises(BufferError):
+            np.from_dlpack(z)
 
-    expected = np.array([1, 2, 3], dtype=np.dtype(np_type_str))
-    arr = pa.array(expected, type=value_type)
-    check_dlpack_export(arr, expected)
+    @pytest.mark.skipif(IS_PYPY, reason="PyPy can't get refcounts.")
+    @pytest.mark.parametrize("arr", new_and_old_dlpack())
+    def test_from_dlpack_refcount(self, arr):
+        arr = arr.copy()
+        y = np.from_dlpack(arr)
+        startcount = sys.getrefcount(arr)
+        del y
+        assert startcount - sys.getrefcount(arr) == 1
 
-    t = pa.Tensor.from_numpy(expected)
-    check_dlpack_export(t, expected)
+    @pytest.mark.parametrize("dtype", [
+        np.bool,
+        np.int8, np.int16, np.int32, np.int64,
+        np.uint8, np.uint16, np.uint32, np.uint64,
+        np.float16, np.float32, np.float64,
+        np.complex64, np.complex128
+    ])
+    @pytest.mark.parametrize("arr", new_and_old_dlpack())
+    def test_dtype_passthrough(self, arr, dtype):
+        x = arr.astype(dtype)
+        y = np.from_dlpack(x)
 
-    arr_sliced = arr.slice(1, 1)
-    expected = np.array([2], dtype=np.dtype(np_type_str))
-    check_dlpack_export(arr_sliced, expected)
+        assert y.dtype == x.dtype
+        assert_array_equal(x, y)
 
-    arr_sliced = arr.slice(0, 1)
-    expected = np.array([1], dtype=np.dtype(np_type_str))
-    check_dlpack_export(arr_sliced, expected)
+    def test_invalid_dtype(self):
+        x = np.asarray(np.datetime64('2021-05-27'))
 
-    arr_sliced = arr.slice(1)
-    expected = np.array([2, 3], dtype=np.dtype(np_type_str))
-    check_dlpack_export(arr_sliced, expected)
+        with pytest.raises(BufferError):
+            np.from_dlpack(x)
 
-    arr_zero = pa.array([], type=value_type)
-    expected = np.array([], dtype=np.dtype(np_type_str))
-    check_dlpack_export(arr_zero, expected)
+    def test_invalid_byte_swapping(self):
+        dt = np.dtype('=i8').newbyteorder()
+        x = np.arange(5, dtype=dt)
 
-    t = pa.Tensor.from_numpy(expected)
-    check_dlpack_export(t, expected)
+        with pytest.raises(BufferError):
+            np.from_dlpack(x)
 
+    def test_non_contiguous(self):
+        x = np.arange(25).reshape((5, 5))
 
-@check_bytes_allocated
-@pytest.mark.parametrize('np_type',
-                         [np.uint8, np.uint16, np.uint32, np.uint64,
-                          np.int8, np.int16, np.int32, np.int64,
-                          np.float16, np.float32, np.float64,])
-def test_tensor_dlpack(np_type):
-    if Version(np.__version__) < Version("1.24.0"):
-        pytest.skip("No dlpack support in numpy versions older than 1.22.0, "
-                    "strict keyword in assert_array_equal added in numpy version "
-                    "1.24.0")
+        y1 = x[0]
+        assert_array_equal(y1, np.from_dlpack(y1))
 
-    arr = np.array([1, 2, 3, 4, 5, 6, 1, 1])
-    expected = np.array(arr, dtype=np_type).reshape((2, 2, 2), order='C')
-    t = pa.Tensor.from_numpy(expected)
-    check_dlpack_export(t, expected)
+        y2 = x[:, 0]
+        assert_array_equal(y2, np.from_dlpack(y2))
 
-    expected = np.array(arr, dtype=np_type).reshape((2, 2, 2), order='F')
-    t = pa.Tensor.from_numpy(expected)
-    check_dlpack_export(t, expected)
+        y3 = x[1, :]
+        assert_array_equal(y3, np.from_dlpack(y3))
 
+        y4 = x[1]
+        assert_array_equal(y4, np.from_dlpack(y4))
 
-def test_dlpack_not_supported():
-    if Version(np.__version__) < Version("1.22.0"):
-        pytest.skip("No dlpack support in numpy versions older than 1.22.0.")
+        y5 = np.diagonal(x).copy()
+        assert_array_equal(y5, np.from_dlpack(y5))
 
-    arr = pa.array([1, None, 3])
-    with pytest.raises(TypeError, match="Can only use DLPack "
-                       "on arrays with no nulls."):
-        np.from_dlpack(arr)
+    @pytest.mark.parametrize("ndim", range(33))
+    def test_higher_dims(self, ndim):
+        shape = (1,) * ndim
+        x = np.zeros(shape, dtype=np.float64)
 
-    arr = pa.array(
-        [[0, 1], [3, 4]],
-        type=pa.list_(pa.int32())
-    )
-    with pytest.raises(TypeError, match="DataType is not compatible with DLPack spec"):
-        np.from_dlpack(arr)
+        assert shape == np.from_dlpack(x).shape
 
-    arr = pa.array([])
-    with pytest.raises(TypeError, match="DataType is not compatible with DLPack spec"):
-        np.from_dlpack(arr)
+    def test_dlpack_device(self):
+        x = np.arange(5)
+        assert x.__dlpack_device__() == (1, 0)
+        y = np.from_dlpack(x)
+        assert y.__dlpack_device__() == (1, 0)
+        z = y[::2]
+        assert z.__dlpack_device__() == (1, 0)
 
-    # DLPack doesn't support bit-packed boolean values
-    arr = pa.array([True, False, True])
-    with pytest.raises(TypeError, match="Bit-packed boolean data type "
-                       "not supported by DLPack."):
-        np.from_dlpack(arr)
+    def dlpack_deleter_exception(self, max_version):
+        x = np.arange(5)
+        _ = x.__dlpack__(max_version=max_version)
+        raise RuntimeError
 
+    @pytest.mark.parametrize("max_version", [None, (1, 0)])
+    def test_dlpack_destructor_exception(self, max_version):
+        with pytest.raises(RuntimeError):
+            self.dlpack_deleter_exception(max_version=max_version)
 
-def test_dlpack_cuda_not_supported():
-    cuda = pytest.importorskip("pyarrow.cuda")
+    def test_readonly(self):
+        x = np.arange(5)
+        x.flags.writeable = False
+        # Raises without max_version
+        with pytest.raises(BufferError):
+            x.__dlpack__()
 
-    schema = pa.schema([pa.field('f0', pa.int16())])
-    a0 = pa.array([1, 2, 3], type=pa.int16())
-    batch = pa.record_batch([a0], schema=schema)
+        # But works fine if we try with version
+        y = np.from_dlpack(x)
+        assert not y.flags.writeable
 
-    cbuf = cuda.serialize_record_batch(batch, cuda.Context(0))
-    cbatch = cuda.read_record_batch(cbuf, batch.schema)
-    carr = cbatch["f0"]
+    def test_writeable(self):
+        x_new, x_old = new_and_old_dlpack()
 
-    # CudaBuffers not yet supported
-    with pytest.raises(NotImplementedError, match="DLPack support is implemented "
-                       "only for buffers on CPU device."):
-        np.from_dlpack(carr)
+        # new dlpacks respect writeability
+        y = np.from_dlpack(x_new)
+        assert y.flags.writeable
 
-    with pytest.raises(NotImplementedError, match="DLPack support is implemented "
-                       "only for buffers on CPU device."):
-        carr.__dlpack_device__()
+        # old dlpacks are not writeable for backwards compatibility
+        y = np.from_dlpack(x_old)
+        assert not y.flags.writeable
+
+    def test_ndim0(self):
+        x = np.array(1.0)
+        y = np.from_dlpack(x)
+        assert_array_equal(x, y)
+
+    def test_size1dims_arrays(self):
+        x = np.ndarray(dtype='f8', shape=(10, 5, 1), strides=(8, 80, 4),
+                       buffer=np.ones(1000, dtype=np.uint8), order='F')
+        y = np.from_dlpack(x)
+        assert_array_equal(x, y)
+
+    def test_copy(self):
+        x = np.arange(5)
+
+        y = np.from_dlpack(x)
+        assert np.may_share_memory(x, y)
+        y = np.from_dlpack(x, copy=False)
+        assert np.may_share_memory(x, y)
+        y = np.from_dlpack(x, copy=True)
+        assert not np.may_share_memory(x, y)
+
+    def test_device(self):
+        x = np.arange(5)
+        # requesting (1, 0), i.e. CPU device works in both calls:
+        x.__dlpack__(dl_device=(1, 0))
+        np.from_dlpack(x, device="cpu")
+        np.from_dlpack(x, device=None)
+
+        with pytest.raises(BufferError):
+            x.__dlpack__(dl_device=(10, 0))
+        with pytest.raises(ValueError):
+            np.from_dlpack(x, device="gpu")
