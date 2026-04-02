@@ -1,19 +1,14 @@
-# NumPy static imports for Cython < 3.0
+# NumPy static imports for Cython >= 3.0
 #
 # If any of the PyArray_* functions are called, import_array must be
-# called first.
+# called first.  This is done automatically by Cython 3.0+ if a call
+# is not detected inside of the module.
 #
 # Author: Dag Sverre Seljebotn
 #
 
-DEF _buffer_format_string_len = 255
-
-cimport cpython.buffer as pybuf
 from cpython.ref cimport Py_INCREF
-from cpython.mem cimport PyObject_Malloc, PyObject_Free
-from cpython.object cimport PyObject, PyTypeObject
-from cpython.buffer cimport PyObject_GetBuffer
-from cpython.type cimport type
+from cpython.object cimport PyObject, PyTypeObject, PyObject_TypeCheck
 cimport libc.stdio as stdio
 
 
@@ -21,13 +16,9 @@ cdef extern from *:
     # Leave a marker that the NumPy declarations came from NumPy itself and not from Cython.
     # See https://github.com/cython/cython/issues/3573
     """
-    /* Using NumPy API declarations from "numpy/__init__.pxd" */
+    /* Using NumPy API declarations from "numpy/__init__.cython-30.pxd" */
     """
 
-
-cdef extern from "Python.h":
-    ctypedef int Py_intptr_t
-    bint PyObject_TypeCheck(object obj, PyTypeObject* type)
 
 cdef extern from "numpy/arrayobject.h":
     # It would be nice to use size_t and ssize_t, but ssize_t has special
@@ -247,23 +238,76 @@ cdef extern from "numpy/arrayobject.h":
         # PyArray_IsNativeByteOrder(dtype.byteorder) instead of
         # directly accessing this field.
         cdef char byteorder
-        # Flags are not directly accessible on Cython <3. Use PyDataType_FLAGS.
-        # cdef char flags
         cdef int type_num
-        # itemsize/elsize, alignment, fields, names, and subarray must
-        # use the `PyDataType_*` accessor macros. With Cython 3 you can
-        # still use getter attributes `dtype.itemsize`
+
+        @property
+        cdef inline npy_intp itemsize(self) noexcept nogil:
+            return PyDataType_ELSIZE(self)
+
+        @property
+        cdef inline npy_intp alignment(self) noexcept nogil:
+            return PyDataType_ALIGNMENT(self)
+
+        # Use fields/names with care as they may be NULL.  You must check
+        # for this using PyDataType_HASFIELDS.
+        @property
+        cdef inline object fields(self):
+            return <object>PyDataType_FIELDS(self)
+
+        @property
+        cdef inline tuple names(self):
+            return <tuple>PyDataType_NAMES(self)
+
+        # Use PyDataType_HASSUBARRAY to test whether this field is
+        # valid (the pointer can be NULL). Most users should access
+        # this field via the inline helper method PyDataType_SHAPE.
+        @property
+        cdef inline PyArray_ArrayDescr* subarray(self) noexcept nogil:
+            return PyDataType_SUBARRAY(self)
+
+        @property
+        cdef inline npy_uint64 flags(self) noexcept nogil:
+            """The data types flags."""
+            return PyDataType_FLAGS(self)
+
 
     ctypedef class numpy.flatiter [object PyArrayIterObject, check_size ignore]:
         # Use through macros
         pass
 
     ctypedef class numpy.broadcast [object PyArrayMultiIterObject, check_size ignore]:
-        cdef int numiter
-        cdef npy_intp size, index
-        cdef int nd
-        cdef npy_intp *dimensions
-        cdef void **iters
+
+        @property
+        cdef inline int numiter(self) noexcept nogil:
+            """The number of arrays that need to be broadcast to the same shape."""
+            return PyArray_MultiIter_NUMITER(self)
+
+        @property
+        cdef inline npy_intp size(self) noexcept nogil:
+            """The total broadcasted size."""
+            return PyArray_MultiIter_SIZE(self)
+
+        @property
+        cdef inline npy_intp index(self) noexcept nogil:
+            """The current (1-d) index into the broadcasted result."""
+            return PyArray_MultiIter_INDEX(self)
+
+        @property
+        cdef inline int nd(self) noexcept nogil:
+            """The number of dimensions in the broadcasted result."""
+            return PyArray_MultiIter_NDIM(self)
+
+        @property
+        cdef inline npy_intp* dimensions(self) noexcept nogil:
+            """The shape of the broadcasted result."""
+            return PyArray_MultiIter_DIMS(self)
+
+        @property
+        cdef inline void** iters(self) noexcept nogil:
+            """An array of iterator objects that holds the iterators for the arrays to be broadcast together.
+            On return, the iterators are adjusted for broadcasting."""
+            return PyArray_MultiIter_ITERS(self)
+
 
     ctypedef struct PyArrayObject:
         # For use in situations where ndarray can't replace PyArrayObject*,
@@ -273,15 +317,56 @@ cdef extern from "numpy/arrayobject.h":
     ctypedef class numpy.ndarray [object PyArrayObject, check_size ignore]:
         cdef __cythonbufferdefaults__ = {"mode": "strided"}
 
-        cdef:
-            # Only taking a few of the most commonly used and stable fields.
-            # One should use PyArray_* macros instead to access the C fields.
-            char *data
-            int ndim "nd"
-            npy_intp *shape "dimensions"
-            npy_intp *strides
-            dtype descr  # deprecated since NumPy 1.7 !
-            PyObject* base #  NOT PUBLIC, DO NOT USE !
+        # NOTE: no field declarations since direct access is deprecated since NumPy 1.7
+        # Instead, we use properties that map to the corresponding C-API functions.
+
+        @property
+        cdef inline PyObject* base(self) noexcept nogil:
+            """Returns a borrowed reference to the object owning the data/memory.
+            """
+            return PyArray_BASE(self)
+
+        @property
+        cdef inline dtype descr(self):
+            """Returns an owned reference to the dtype of the array.
+            """
+            return <dtype>PyArray_DESCR(self)
+
+        @property
+        cdef inline int ndim(self) noexcept nogil:
+            """Returns the number of dimensions in the array.
+            """
+            return PyArray_NDIM(self)
+
+        @property
+        cdef inline npy_intp *shape(self) noexcept nogil:
+            """Returns a pointer to the dimensions/shape of the array.
+            The number of elements matches the number of dimensions of the array (ndim).
+            Can return NULL for 0-dimensional arrays.
+            """
+            return PyArray_DIMS(self)
+
+        @property
+        cdef inline npy_intp *strides(self) noexcept nogil:
+            """Returns a pointer to the strides of the array.
+            The number of elements matches the number of dimensions of the array (ndim).
+            """
+            return PyArray_STRIDES(self)
+
+        @property
+        cdef inline npy_intp size(self) noexcept nogil:
+            """Returns the total size (in number of elements) of the array.
+            """
+            return PyArray_SIZE(self)
+
+        @property
+        cdef inline char* data(self) noexcept nogil:
+            """The pointer to the data buffer as a char*.
+            This is provided for legacy reasons to avoid direct struct field access.
+            For new code that needs this access, you probably want to cast the result
+            of `PyArray_DATA()` instead, which returns a 'void*'.
+            """
+            return PyArray_BYTES(self)
 
 
     int _import_array() except -1
@@ -734,6 +819,7 @@ cdef extern from "numpy/ndarraytypes.h":
     ctypedef int (*NpyIter_IterNextFunc "NpyIter_IterNextFunc *")(NpyIter* it) noexcept nogil
     ctypedef void (*NpyIter_GetMultiIndexFunc "NpyIter_GetMultiIndexFunc *")(NpyIter* it, npy_intp* outcoords) noexcept nogil
 
+
 cdef extern from "numpy/arrayscalars.h":
 
     # abstract types
@@ -849,6 +935,7 @@ cdef extern from "numpy/ufuncobject.h":
         NPY_FPE_UNDERFLOW
         NPY_FPE_INVALID
 
+
     object PyUFunc_FromFuncAndData(PyUFuncGenericFunction *,
           void **, char *, int, int, int, int, char *, char *, int)
     int PyUFunc_RegisterLoopForType(ufunc, int,
@@ -905,7 +992,7 @@ cdef extern from "numpy/ufuncobject.h":
 
     int _import_umath() except -1
 
-cdef inline void set_array_base(ndarray arr, object base):
+cdef inline void set_array_base(ndarray arr, object base) except *:
     Py_INCREF(base) # important to do this before stealing the reference below!
     PyArray_SetBaseObject(arr, base)
 
@@ -936,7 +1023,7 @@ cdef inline int import_ufunc() except -1:
         raise ImportError("numpy._core.umath failed to import")
 
 
-cdef inline bint is_timedelta64_object(object obj):
+cdef inline bint is_timedelta64_object(object obj) noexcept:
     """
     Cython equivalent of `isinstance(obj, np.timedelta64)`
 
@@ -951,7 +1038,7 @@ cdef inline bint is_timedelta64_object(object obj):
     return PyObject_TypeCheck(obj, &PyTimedeltaArrType_Type)
 
 
-cdef inline bint is_datetime64_object(object obj):
+cdef inline bint is_datetime64_object(object obj) noexcept:
     """
     Cython equivalent of `isinstance(obj, np.datetime64)`
 
@@ -966,7 +1053,7 @@ cdef inline bint is_datetime64_object(object obj):
     return PyObject_TypeCheck(obj, &PyDatetimeArrType_Type)
 
 
-cdef inline npy_datetime get_datetime64_value(object obj) nogil:
+cdef inline npy_datetime get_datetime64_value(object obj) noexcept nogil:
     """
     returns the int64 value underlying scalar numpy datetime64 object
 
@@ -976,14 +1063,14 @@ cdef inline npy_datetime get_datetime64_value(object obj) nogil:
     return (<PyDatetimeScalarObject*>obj).obval
 
 
-cdef inline npy_timedelta get_timedelta64_value(object obj) nogil:
+cdef inline npy_timedelta get_timedelta64_value(object obj) noexcept nogil:
     """
     returns the int64 value underlying scalar numpy timedelta64 object
     """
     return (<PyTimedeltaScalarObject*>obj).obval
 
 
-cdef inline NPY_DATETIMEUNIT get_datetime64_unit(object obj) nogil:
+cdef inline NPY_DATETIMEUNIT get_datetime64_unit(object obj) noexcept nogil:
     """
     returns the unit part of the dtype for a numpy datetime64 object.
     """
@@ -1110,9 +1197,9 @@ cdef extern from "numpy/arrayobject.h":
     #
     # These don't match the definition in the C API because Cython can't wrap
     # function pointers that return functions.
-    NpyIter_IterNextFunc* NpyIter_GetIterNext(NpyIter* it, char** errmsg) except NULL
-    NpyIter_GetMultiIndexFunc* NpyIter_GetGetMultiIndex(NpyIter* it,
-                                                        char** errmsg) except NULL
+    NpyIter_IterNextFunc NpyIter_GetIterNext(NpyIter* it, char** errmsg) except NULL
+    NpyIter_GetMultiIndexFunc NpyIter_GetGetMultiIndex(NpyIter* it,
+                                                       char** errmsg) except NULL
     char** NpyIter_GetDataPtrArray(NpyIter* it) nogil
     char** NpyIter_GetInitialDataPtrArray(NpyIter* it) nogil
     npy_intp* NpyIter_GetIndexPtr(NpyIter* it)

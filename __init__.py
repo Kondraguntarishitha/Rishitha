@@ -1,450 +1,955 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
-
-# flake8: noqa
-
 """
-PyArrow is the python implementation of Apache Arrow.
+NumPy
+=====
 
-Apache Arrow is a cross-language development platform for in-memory data.
-It specifies a standardized language-independent columnar memory format for
-flat and hierarchical data, organized for efficient analytic operations on
-modern hardware. It also provides computational libraries and zero-copy
-streaming messaging and interprocess communication.
+Provides
+  1. An array object of arbitrary homogeneous items
+  2. Fast mathematical operations over arrays
+  3. Linear Algebra, Fourier Transforms, Random Number Generation
 
-For more information see the official page at https://arrow.apache.org
+How to use the documentation
+----------------------------
+Documentation is available in two forms: docstrings provided
+with the code, and a loose standing reference guide, available from
+`the NumPy homepage <https://numpy.org>`_.
+
+We recommend exploring the docstrings using
+`IPython <https://ipython.org>`_, an advanced Python shell with
+TAB-completion and introspection capabilities.  See below for further
+instructions.
+
+The docstring examples assume that `numpy` has been imported as ``np``::
+
+  >>> import numpy as np
+
+Code snippets are indicated by three greater-than signs::
+
+  >>> x = 42
+  >>> x = x + 1
+
+Use the built-in ``help`` function to view a function's docstring::
+
+  >>> help(np.sort)
+  ... # doctest: +SKIP
+
+For some objects, ``np.info(obj)`` may provide additional help.  This is
+particularly true if you see the line "Help on ufunc object:" at the top
+of the help() page.  Ufuncs are implemented in C, not Python, for speed.
+The native Python help() does not know how to view their help, but our
+np.info() function does.
+
+Available subpackages
+---------------------
+lib
+    Basic functions used by several sub-packages.
+random
+    Core Random Tools
+linalg
+    Core Linear Algebra Tools
+fft
+    Core FFT routines
+polynomial
+    Polynomial tools
+testing
+    NumPy testing tools
+distutils
+    Enhancements to distutils with support for
+    Fortran compilers support and more (for Python <= 3.11)
+
+Utilities
+---------
+test
+    Run numpy unittests
+show_config
+    Show numpy build configuration
+__version__
+    NumPy version string
+
+Viewing documentation using IPython
+-----------------------------------
+
+Start IPython and import `numpy` usually under the alias ``np``: `import
+numpy as np`.  Then, directly past or use the ``%cpaste`` magic to paste
+examples into the shell.  To see which functions are available in `numpy`,
+type ``np.<TAB>`` (where ``<TAB>`` refers to the TAB key), or use
+``np.*cos*?<ENTER>`` (where ``<ENTER>`` refers to the ENTER key) to narrow
+down the list.  To view the docstring for a function, use
+``np.cos?<ENTER>`` (to view the docstring) and ``np.cos??<ENTER>`` (to view
+the source code).
+
+Copies vs. in-place operation
+-----------------------------
+Most of the functions in `numpy` return a copy of the array argument
+(e.g., `np.sort`).  In-place versions of these functions are often
+available as array methods, i.e. ``x = np.array([1,2,3]); x.sort()``.
+Exceptions to this rule are documented.
+
 """
 
 
 # start delvewheel patch
-def _delvewheel_patch_1_12_0():
+def _delvewheel_patch_1_11_2():
     import os
-    if os.path.isdir(libs_dir := os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, 'pyarrow.libs'))):
+    if os.path.isdir(libs_dir := os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, 'numpy.libs'))):
         os.add_dll_directory(libs_dir)
 
 
-_delvewheel_patch_1_12_0()
-del _delvewheel_patch_1_12_0
+_delvewheel_patch_1_11_2()
+del _delvewheel_patch_1_11_2
 # end delvewheel patch
 
-import importlib as _importlib
-import os as _os
-import platform as _platform
-import sys as _sys
+import os
+import sys
+import warnings
 
+# If a version with git hash was stored, use that instead
+from . import version
+from ._expired_attrs_2_0 import __expired_attributes__
+from ._globals import _CopyMode, _NoValue
+from .version import __version__
+
+# We first need to detect if we're being called as part of the numpy setup
+# procedure itself in a reliable manner.
 try:
-    from ._generated_version import version as __version__
-except ImportError:
-    # Package is not installed, parse git tag at runtime
-    try:
-        import setuptools_scm
-        # Code duplicated from setup.py to avoid a dependency on each other
+    __NUMPY_SETUP__  # noqa: B018
+except NameError:
+    __NUMPY_SETUP__ = False
 
-        def parse_git(root, **kwargs):
-            """
-            Parse function for setuptools_scm that ignores tags for non-C++
-            subprojects, e.g. apache-arrow-js-XXX tags.
-            """
-            from setuptools_scm.git import parse
-            kwargs['describe_command'] = \
-                "git describe --dirty --tags --long --match 'apache-arrow-[0-9]*.*'"
-            return parse(root, **kwargs)
-        __version__ = setuptools_scm.get_version('../',
-                                                 parse=parse_git)
-    except ImportError:
-        __version__ = None
-
-from pyarrow.lib import (BuildInfo, CppBuildInfo, RuntimeInfo, set_timezone_db_path,
-                         MonthDayNano, VersionInfo, build_info, cpp_build_info,
-                         cpp_version, cpp_version_info, runtime_info,
-                         cpu_count, set_cpu_count, enable_signal_handlers,
-                         io_thread_count, set_io_thread_count)
-
-
-def show_versions():
-    """
-    Print various version information, to help with error reporting.
-    """
-    def print_entry(label, value):
-        print(f"{label: <26}: {value: <8}")
-
-    print("pyarrow version info\n--------------------")
-    print_entry("Package kind", build_info.cpp_build_info.package_kind
-                if len(build_info.cpp_build_info.package_kind) > 0
-                else "not indicated")
-    print_entry("Arrow C++ library version", build_info.cpp_build_info.version)
-    print_entry("Arrow C++ compiler",
-                (f"{build_info.cpp_build_info.compiler_id} "
-                 f"{build_info.cpp_build_info.compiler_version}"))
-    print_entry("Arrow C++ compiler flags", build_info.cpp_build_info.compiler_flags)
-    print_entry("Arrow C++ git revision", build_info.cpp_build_info.git_id)
-    print_entry("Arrow C++ git description", build_info.cpp_build_info.git_description)
-    print_entry("Arrow C++ build type", build_info.cpp_build_info.build_type)
-    print_entry("PyArrow build type", build_info.build_type)
-
-
-def _module_is_available(module):
-    try:
-        _importlib.import_module(f'pyarrow.{module}')
-    except ImportError:
-        return False
-    else:
-        return True
-
-
-def _filesystem_is_available(fs):
-    try:
-        import pyarrow.fs
-    except ImportError:
-        return False
+if __NUMPY_SETUP__:
+    sys.stderr.write('Running from numpy source directory.\n')
+else:
+    # Allow distributors to run custom init code before importing numpy._core
+    from . import _distributor_init
 
     try:
-        getattr(pyarrow.fs, fs)
-    except (ImportError, AttributeError):
-        return False
-    else:
-        return True
+        from numpy.__config__ import show_config
+    except ImportError as e:
+        if isinstance(e, ModuleNotFoundError) and e.name == "numpy.__config__":
+            # The __config__ module itself was not found, so add this info:
+            msg = """Error importing numpy: you should not try to import numpy from
+            its source directory; please exit the numpy source tree, and relaunch
+            your python interpreter from there."""
+            raise ImportError(msg) from e
+        raise
 
+    from . import _core
+    from ._core import (
+        False_,
+        ScalarType,
+        True_,
+        abs,
+        absolute,
+        acos,
+        acosh,
+        add,
+        all,
+        allclose,
+        amax,
+        amin,
+        any,
+        arange,
+        arccos,
+        arccosh,
+        arcsin,
+        arcsinh,
+        arctan,
+        arctan2,
+        arctanh,
+        argmax,
+        argmin,
+        argpartition,
+        argsort,
+        argwhere,
+        around,
+        array,
+        array2string,
+        array_equal,
+        array_equiv,
+        array_repr,
+        array_str,
+        asanyarray,
+        asarray,
+        ascontiguousarray,
+        asfortranarray,
+        asin,
+        asinh,
+        astype,
+        atan,
+        atan2,
+        atanh,
+        atleast_1d,
+        atleast_2d,
+        atleast_3d,
+        base_repr,
+        binary_repr,
+        bitwise_and,
+        bitwise_count,
+        bitwise_invert,
+        bitwise_left_shift,
+        bitwise_not,
+        bitwise_or,
+        bitwise_right_shift,
+        bitwise_xor,
+        block,
+        bool,
+        bool_,
+        broadcast,
+        busday_count,
+        busday_offset,
+        busdaycalendar,
+        byte,
+        bytes_,
+        can_cast,
+        cbrt,
+        cdouble,
+        ceil,
+        character,
+        choose,
+        clip,
+        clongdouble,
+        complex64,
+        complex128,
+        complexfloating,
+        compress,
+        concat,
+        concatenate,
+        conj,
+        conjugate,
+        convolve,
+        copysign,
+        copyto,
+        correlate,
+        cos,
+        cosh,
+        count_nonzero,
+        cross,
+        csingle,
+        cumprod,
+        cumsum,
+        cumulative_prod,
+        cumulative_sum,
+        datetime64,
+        datetime_as_string,
+        datetime_data,
+        deg2rad,
+        degrees,
+        diagonal,
+        divide,
+        divmod,
+        dot,
+        double,
+        dtype,
+        e,
+        einsum,
+        einsum_path,
+        empty,
+        empty_like,
+        equal,
+        errstate,
+        euler_gamma,
+        exp,
+        exp2,
+        expm1,
+        fabs,
+        finfo,
+        flatiter,
+        flatnonzero,
+        flexible,
+        float16,
+        float32,
+        float64,
+        float_power,
+        floating,
+        floor,
+        floor_divide,
+        fmax,
+        fmin,
+        fmod,
+        format_float_positional,
+        format_float_scientific,
+        frexp,
+        from_dlpack,
+        frombuffer,
+        fromfile,
+        fromfunction,
+        fromiter,
+        frompyfunc,
+        fromstring,
+        full,
+        full_like,
+        gcd,
+        generic,
+        geomspace,
+        get_printoptions,
+        getbufsize,
+        geterr,
+        geterrcall,
+        greater,
+        greater_equal,
+        half,
+        heaviside,
+        hstack,
+        hypot,
+        identity,
+        iinfo,
+        indices,
+        inexact,
+        inf,
+        inner,
+        int8,
+        int16,
+        int32,
+        int64,
+        int_,
+        intc,
+        integer,
+        intp,
+        invert,
+        is_busday,
+        isclose,
+        isdtype,
+        isfinite,
+        isfortran,
+        isinf,
+        isnan,
+        isnat,
+        isscalar,
+        issubdtype,
+        lcm,
+        ldexp,
+        left_shift,
+        less,
+        less_equal,
+        lexsort,
+        linspace,
+        little_endian,
+        log,
+        log1p,
+        log2,
+        log10,
+        logaddexp,
+        logaddexp2,
+        logical_and,
+        logical_not,
+        logical_or,
+        logical_xor,
+        logspace,
+        long,
+        longdouble,
+        longlong,
+        matmul,
+        matrix_transpose,
+        matvec,
+        max,
+        maximum,
+        may_share_memory,
+        mean,
+        memmap,
+        min,
+        min_scalar_type,
+        minimum,
+        mod,
+        modf,
+        moveaxis,
+        multiply,
+        nan,
+        ndarray,
+        ndim,
+        nditer,
+        negative,
+        nested_iters,
+        newaxis,
+        nextafter,
+        nonzero,
+        not_equal,
+        number,
+        object_,
+        ones,
+        ones_like,
+        outer,
+        partition,
+        permute_dims,
+        pi,
+        positive,
+        pow,
+        power,
+        printoptions,
+        prod,
+        promote_types,
+        ptp,
+        put,
+        putmask,
+        rad2deg,
+        radians,
+        ravel,
+        recarray,
+        reciprocal,
+        record,
+        remainder,
+        repeat,
+        require,
+        reshape,
+        resize,
+        result_type,
+        right_shift,
+        rint,
+        roll,
+        rollaxis,
+        round,
+        sctypeDict,
+        searchsorted,
+        set_printoptions,
+        setbufsize,
+        seterr,
+        seterrcall,
+        shape,
+        shares_memory,
+        short,
+        sign,
+        signbit,
+        signedinteger,
+        sin,
+        single,
+        sinh,
+        size,
+        sort,
+        spacing,
+        sqrt,
+        square,
+        squeeze,
+        stack,
+        std,
+        str_,
+        subtract,
+        sum,
+        swapaxes,
+        take,
+        tan,
+        tanh,
+        tensordot,
+        timedelta64,
+        trace,
+        transpose,
+        true_divide,
+        trunc,
+        typecodes,
+        ubyte,
+        ufunc,
+        uint,
+        uint8,
+        uint16,
+        uint32,
+        uint64,
+        uintc,
+        uintp,
+        ulong,
+        ulonglong,
+        unsignedinteger,
+        unstack,
+        ushort,
+        var,
+        vdot,
+        vecdot,
+        vecmat,
+        void,
+        vstack,
+        where,
+        zeros,
+        zeros_like,
+    )
 
-def show_info():
-    """
-    Print detailed version and platform information, for error reporting
-    """
-    show_versions()
-
-    def print_entry(label, value):
-        print(f"  {label: <20}: {value: <8}")
-
-    print("\nPlatform:")
-    print_entry("OS / Arch", f"{_platform.system()} {_platform.machine()}")
-    print_entry("SIMD Level", runtime_info().simd_level)
-    print_entry("Detected SIMD Level", runtime_info().detected_simd_level)
-
-    pool = default_memory_pool()
-    print("\nMemory:")
-    print_entry("Default backend", pool.backend_name)
-    print_entry("Bytes allocated", f"{pool.bytes_allocated()} bytes")
-    print_entry("Max memory", f"{pool.max_memory()} bytes")
-    print_entry("Supported Backends", ', '.join(supported_memory_backends()))
-
-    print("\nOptional modules:")
-    modules = ["csv", "cuda", "dataset", "feather", "flight", "fs", "gandiva", "json",
-               "orc", "parquet"]
-    for module in modules:
-        status = "Enabled" if _module_is_available(module) else "-"
-        print(f"  {module: <20}: {status: <8}")
-
-    print("\nFilesystems:")
-    filesystems = ["AzureFileSystem", "GcsFileSystem",
-                   "HadoopFileSystem", "S3FileSystem"]
-    for fs in filesystems:
-        status = "Enabled" if _filesystem_is_available(fs) else "-"
-        print(f"  {fs: <20}: {status: <8}")
-
-    print("\nCompression Codecs:")
-    codecs = ["brotli", "bz2", "gzip", "lz4_frame", "lz4", "snappy", "zstd"]
-    for codec in codecs:
-        status = "Enabled" if Codec.is_available(codec) else "-"
-        print(f"  {codec: <20}: {status: <8}")
-
-
-from pyarrow.lib import (null, bool_,
-                         int8, int16, int32, int64,
-                         uint8, uint16, uint32, uint64,
-                         time32, time64, timestamp, date32, date64, duration,
-                         month_day_nano_interval,
-                         float16, float32, float64,
-                         binary, string, utf8, binary_view, string_view,
-                         large_binary, large_string, large_utf8,
-                         decimal32, decimal64, decimal128, decimal256,
-                         list_, large_list, list_view, large_list_view,
-                         map_, struct,
-                         union, sparse_union, dense_union,
-                         dictionary,
-                         run_end_encoded,
-                         bool8, fixed_shape_tensor, json_, opaque, uuid,
-                         field,
-                         type_for_alias,
-                         DataType, DictionaryType, StructType,
-                         ListType, LargeListType, FixedSizeListType,
-                         ListViewType, LargeListViewType,
-                         MapType, UnionType, SparseUnionType, DenseUnionType,
-                         TimestampType, Time32Type, Time64Type, DurationType,
-                         FixedSizeBinaryType,
-                         Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type,
-                         BaseExtensionType, ExtensionType,
-                         RunEndEncodedType, Bool8Type, FixedShapeTensorType,
-                         JsonType, OpaqueType, UuidType,
-                         UnknownExtensionType,
-                         register_extension_type, unregister_extension_type,
-                         DictionaryMemo,
-                         KeyValueMetadata,
-                         Field,
-                         Schema,
-                         schema,
-                         unify_schemas,
-                         Array, Tensor,
-                         array, chunked_array, record_batch, nulls, repeat,
-                         SparseCOOTensor, SparseCSRMatrix, SparseCSCMatrix,
-                         SparseCSFTensor,
-                         infer_type, from_numpy_dtype,
-                         arange,
-                         NullArray,
-                         NumericArray, IntegerArray, FloatingPointArray,
-                         BooleanArray,
-                         Int8Array, UInt8Array,
-                         Int16Array, UInt16Array,
-                         Int32Array, UInt32Array,
-                         Int64Array, UInt64Array,
-                         HalfFloatArray, FloatArray, DoubleArray,
-                         ListArray, LargeListArray, FixedSizeListArray,
-                         ListViewArray, LargeListViewArray,
-                         MapArray, UnionArray,
-                         BinaryArray, StringArray,
-                         LargeBinaryArray, LargeStringArray,
-                         BinaryViewArray, StringViewArray,
-                         FixedSizeBinaryArray,
-                         DictionaryArray,
-                         Date32Array, Date64Array, TimestampArray,
-                         Time32Array, Time64Array, DurationArray,
-                         MonthDayNanoIntervalArray,
-                         Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
-                         StructArray, ExtensionArray,
-                         RunEndEncodedArray, Bool8Array, FixedShapeTensorArray,
-                         JsonArray, OpaqueArray, UuidArray,
-                         scalar, NA, _NULL as NULL, Scalar,
-                         NullScalar, BooleanScalar,
-                         Int8Scalar, Int16Scalar, Int32Scalar, Int64Scalar,
-                         UInt8Scalar, UInt16Scalar, UInt32Scalar, UInt64Scalar,
-                         HalfFloatScalar, FloatScalar, DoubleScalar,
-                         Decimal32Scalar, Decimal64Scalar, Decimal128Scalar, Decimal256Scalar,
-                         ListScalar, LargeListScalar, FixedSizeListScalar,
-                         ListViewScalar, LargeListViewScalar,
-                         Date32Scalar, Date64Scalar,
-                         Time32Scalar, Time64Scalar,
-                         TimestampScalar, DurationScalar,
-                         MonthDayNanoIntervalScalar,
-                         BinaryScalar, LargeBinaryScalar, BinaryViewScalar,
-                         StringScalar, LargeStringScalar, StringViewScalar,
-                         FixedSizeBinaryScalar, DictionaryScalar,
-                         MapScalar, StructScalar, UnionScalar,
-                         RunEndEncodedScalar, Bool8Scalar, ExtensionScalar,
-                         FixedShapeTensorScalar, JsonScalar, OpaqueScalar, UuidScalar)
-
-# Buffers, allocation
-from pyarrow.lib import (DeviceAllocationType, Device, MemoryManager,
-                         default_cpu_memory_manager)
-
-from pyarrow.lib import (Buffer, ResizableBuffer, foreign_buffer, py_buffer,
-                         Codec, compress, decompress, allocate_buffer)
-
-from pyarrow.lib import (MemoryPool, LoggingMemoryPool, ProxyMemoryPool,
-                         total_allocated_bytes, set_memory_pool,
-                         default_memory_pool, system_memory_pool,
-                         jemalloc_memory_pool, mimalloc_memory_pool,
-                         logging_memory_pool, proxy_memory_pool,
-                         log_memory_allocations, jemalloc_set_decay_ms,
-                         supported_memory_backends)
-
-# I/O
-from pyarrow.lib import (NativeFile, PythonFile,
-                         BufferedInputStream, BufferedOutputStream, CacheOptions,
-                         CompressedInputStream, CompressedOutputStream,
-                         TransformInputStream, transcoding_input_stream,
-                         FixedSizeBufferWriter,
-                         BufferReader, BufferOutputStream,
-                         OSFile, MemoryMappedFile, memory_map,
-                         create_memory_map, MockOutputStream,
-                         input_stream, output_stream,
-                         have_libhdfs)
-
-from pyarrow.lib import (ChunkedArray, RecordBatch, Table, table,
-                         concat_arrays, concat_tables, TableGroupBy,
-                         RecordBatchReader, concat_batches)
-
-# Exceptions
-from pyarrow.lib import (ArrowCancelled,
-                         ArrowCapacityError,
-                         ArrowException,
-                         ArrowKeyError,
-                         ArrowIndexError,
-                         ArrowInvalid,
-                         ArrowIOError,
-                         ArrowMemoryError,
-                         ArrowNotImplementedError,
-                         ArrowTypeError,
-                         ArrowSerializationError)
-
-from pyarrow.ipc import serialize_pandas, deserialize_pandas
-import pyarrow.ipc as ipc
-
-import pyarrow.types as types
-
-
-# ----------------------------------------------------------------------
-# Deprecations
-
-from pyarrow.util import _deprecate_api, _deprecate_class
-
-
-# TODO: Deprecate these somehow in the pyarrow namespace
-from pyarrow.ipc import (Message, MessageReader, MetadataVersion,
-                         RecordBatchFileReader, RecordBatchFileWriter,
-                         RecordBatchStreamReader, RecordBatchStreamWriter)
-
-# ----------------------------------------------------------------------
-# Returning absolute path to the pyarrow include directory (if bundled, e.g. in
-# wheels)
-
-
-def get_include():
-    """
-    Return absolute path to directory containing Arrow C++ include
-    headers. Similar to numpy.get_include
-    """
-    return _os.path.join(_os.path.dirname(__file__), 'include')
-
-
-def _get_pkg_config_executable():
-    return _os.environ.get('PKG_CONFIG', 'pkg-config')
-
-
-def _has_pkg_config(pkgname):
-    import subprocess
-    try:
-        return subprocess.call([_get_pkg_config_executable(),
-                                '--exists', pkgname]) == 0
-    except FileNotFoundError:
-        return False
-
-
-def _read_pkg_config_variable(pkgname, cli_args):
-    import subprocess
-    cmd = [_get_pkg_config_executable(), pkgname] + cli_args
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE)
-    out, err = proc.communicate()
-    if proc.returncode != 0:
-        raise RuntimeError("pkg-config failed: " + err.decode('utf8'))
-    return out.rstrip().decode('utf8')
-
-
-def get_libraries():
-    """
-    Return list of library names to include in the `libraries` argument for C
-    or Cython extensions using pyarrow
-    """
-    return ['arrow_python', 'arrow']
-
-
-def create_library_symlinks():
-    """
-    With Linux and macOS wheels, the bundled shared libraries have an embedded
-    ABI version like libarrow.so.17 or libarrow.17.dylib and so linking to them
-    with -larrow won't work unless we create symlinks at locations like
-    site-packages/pyarrow/libarrow.so. This unfortunate workaround addresses
-    prior problems we had with shipping two copies of the shared libraries to
-    permit third party projects like turbodbc to build their C++ extensions
-    against the pyarrow wheels.
-
-    This function must only be invoked once and only when the shared libraries
-    are bundled with the Python package, which should only apply to wheel-based
-    installs. It requires write access to the site-packages/pyarrow directory
-    and so depending on your system may need to be run with root.
-    """
-    import glob
-    if _sys.platform == 'win32':
-        return
-    package_cwd = _os.path.dirname(__file__)
-
-    if _sys.platform == 'linux':
-        bundled_libs = glob.glob(_os.path.join(package_cwd, '*.so.*'))
-
-        def get_symlink_path(hard_path):
-            return hard_path.rsplit('.', 1)[0]
-    else:
-        bundled_libs = glob.glob(_os.path.join(package_cwd, '*.*.dylib'))
-
-        def get_symlink_path(hard_path):
-            return '.'.join((hard_path.rsplit('.', 2)[0], 'dylib'))
-
-    for lib_hard_path in bundled_libs:
-        symlink_path = get_symlink_path(lib_hard_path)
-        if _os.path.exists(symlink_path):
-            continue
+    # NOTE: It's still under discussion whether these aliases
+    # should be removed.
+    for ta in ["float96", "float128", "complex192", "complex256"]:
         try:
-            _os.symlink(lib_hard_path, symlink_path)
-        except PermissionError:
-            print("Tried creating symlink {}. If you need to link to "
-                  "bundled shared libraries, run "
-                  "pyarrow.create_library_symlinks() as root")
+            globals()[ta] = getattr(_core, ta)
+        except AttributeError:
+            pass
+    del ta
 
+    from . import lib, matrixlib as _mat
+    from .lib import scimath as emath
+    from .lib._arraypad_impl import pad
+    from .lib._arraysetops_impl import (
+        ediff1d,
+        intersect1d,
+        isin,
+        setdiff1d,
+        setxor1d,
+        union1d,
+        unique,
+        unique_all,
+        unique_counts,
+        unique_inverse,
+        unique_values,
+    )
+    from .lib._function_base_impl import (
+        angle,
+        append,
+        asarray_chkfinite,
+        average,
+        bartlett,
+        bincount,
+        blackman,
+        copy,
+        corrcoef,
+        cov,
+        delete,
+        diff,
+        digitize,
+        extract,
+        flip,
+        gradient,
+        hamming,
+        hanning,
+        i0,
+        insert,
+        interp,
+        iterable,
+        kaiser,
+        median,
+        meshgrid,
+        percentile,
+        piecewise,
+        place,
+        quantile,
+        rot90,
+        select,
+        sinc,
+        sort_complex,
+        trapezoid,
+        trim_zeros,
+        unwrap,
+        vectorize,
+    )
+    from .lib._histograms_impl import histogram, histogram_bin_edges, histogramdd
+    from .lib._index_tricks_impl import (
+        c_,
+        diag_indices,
+        diag_indices_from,
+        fill_diagonal,
+        index_exp,
+        ix_,
+        mgrid,
+        ndenumerate,
+        ndindex,
+        ogrid,
+        r_,
+        ravel_multi_index,
+        s_,
+        unravel_index,
+    )
+    from .lib._nanfunctions_impl import (
+        nanargmax,
+        nanargmin,
+        nancumprod,
+        nancumsum,
+        nanmax,
+        nanmean,
+        nanmedian,
+        nanmin,
+        nanpercentile,
+        nanprod,
+        nanquantile,
+        nanstd,
+        nansum,
+        nanvar,
+    )
+    from .lib._npyio_impl import (
+        fromregex,
+        genfromtxt,
+        load,
+        loadtxt,
+        packbits,
+        save,
+        savetxt,
+        savez,
+        savez_compressed,
+        unpackbits,
+    )
+    from .lib._polynomial_impl import (
+        poly,
+        poly1d,
+        polyadd,
+        polyder,
+        polydiv,
+        polyfit,
+        polyint,
+        polymul,
+        polysub,
+        polyval,
+        roots,
+    )
+    from .lib._shape_base_impl import (
+        apply_along_axis,
+        apply_over_axes,
+        array_split,
+        column_stack,
+        dsplit,
+        dstack,
+        expand_dims,
+        hsplit,
+        kron,
+        put_along_axis,
+        row_stack,
+        split,
+        take_along_axis,
+        tile,
+        vsplit,
+    )
+    from .lib._stride_tricks_impl import (
+        broadcast_arrays,
+        broadcast_shapes,
+        broadcast_to,
+    )
+    from .lib._twodim_base_impl import (
+        diag,
+        diagflat,
+        eye,
+        fliplr,
+        flipud,
+        histogram2d,
+        mask_indices,
+        tri,
+        tril,
+        tril_indices,
+        tril_indices_from,
+        triu,
+        triu_indices,
+        triu_indices_from,
+        vander,
+    )
+    from .lib._type_check_impl import (
+        common_type,
+        imag,
+        iscomplex,
+        iscomplexobj,
+        isreal,
+        isrealobj,
+        mintypecode,
+        nan_to_num,
+        real,
+        real_if_close,
+        typename,
+    )
+    from .lib._ufunclike_impl import fix, isneginf, isposinf
+    from .lib._utils_impl import get_include, info, show_runtime
+    from .matrixlib import asmatrix, bmat, matrix
 
-def get_library_dirs():
-    """
-    Return lists of directories likely to contain Arrow C++ libraries for
-    linking C or Cython extensions using pyarrow
-    """
-    package_cwd = _os.path.dirname(__file__)
-    library_dirs = [package_cwd]
+    # public submodules are imported lazily, therefore are accessible from
+    # __getattr__. Note that `distutils` (deprecated) and `array_api`
+    # (experimental label) are not added here, because `from numpy import *`
+    # must not raise any warnings - that's too disruptive.
+    __numpy_submodules__ = {
+        "linalg", "fft", "dtypes", "random", "polynomial", "ma",
+        "exceptions", "lib", "ctypeslib", "testing", "typing",
+        "f2py", "test", "rec", "char", "core", "strings",
+    }
 
-    def append_library_dir(library_dir):
-        if library_dir not in library_dirs:
-            library_dirs.append(library_dir)
+    # We build warning messages for former attributes
+    _msg = (
+        "module 'numpy' has no attribute '{n}'.\n"
+        "`np.{n}` was a deprecated alias for the builtin `{n}`. "
+        "To avoid this error in existing code, use `{n}` by itself. "
+        "Doing this will not modify any behavior and is safe. {extended_msg}\n"
+        "The aliases was originally deprecated in NumPy 1.20; for more "
+        "details and guidance see the original release note at:\n"
+        "    https://numpy.org/devdocs/release/1.20.0-notes.html#deprecations")
 
-    # Search library paths via pkg-config. This is necessary if the user
-    # installed libarrow and the other shared libraries manually and they
-    # are not shipped inside the pyarrow package (see also ARROW-2976).
-    pkg_config_executable = _os.environ.get('PKG_CONFIG') or 'pkg-config'
-    for pkgname in ["arrow", "arrow_python"]:
-        if _has_pkg_config(pkgname):
-            library_dir = _read_pkg_config_variable(pkgname,
-                                                    ["--libs-only-L"])
-            # pkg-config output could be empty if Arrow is installed
-            # as a system package.
-            if library_dir:
-                if not library_dir.startswith("-L"):
-                    raise ValueError(
-                        "pkg-config --libs-only-L returned unexpected "
-                        f"value {library_dir!r}")
-                append_library_dir(library_dir[2:])
+    _specific_msg = (
+        "If you specifically wanted the numpy scalar type, use `np.{}` here.")
 
-    if _sys.platform == 'win32':
-        # TODO(wesm): Is this necessary, or does setuptools within a conda
-        # installation add Library\lib to the linker path for MSVC?
-        python_base_install = _os.path.dirname(_sys.executable)
-        library_dir = _os.path.join(python_base_install, 'Library', 'lib')
+    _int_extended_msg = (
+        "When replacing `np.{}`, you may wish to use e.g. `np.int64` "
+        "or `np.int32` to specify the precision. If you wish to review "
+        "your current use, check the release note link for "
+        "additional information.")
 
-        if _os.path.exists(_os.path.join(library_dir, 'arrow.lib')):
-            append_library_dir(library_dir)
+    _type_info = [
+        ("object", ""),  # The NumPy scalar only exists by name.
+        ("float", _specific_msg.format("float64")),
+        ("complex", _specific_msg.format("complex128")),
+        ("str", _specific_msg.format("str_")),
+        ("int", _int_extended_msg.format("int"))]
 
-        # GH-45530: Add pyarrow.libs dir containing delvewheel-mangled
-        # msvcp140.dll
-        pyarrow_libs_dir = _os.path.abspath(
-            _os.path.join(_os.path.dirname(__file__), _os.pardir, "pyarrow.libs")
+    __former_attrs__ = {
+         n: _msg.format(n=n, extended_msg=extended_msg)
+         for n, extended_msg in _type_info
+     }
+
+    # Some of these could be defined right away, but most were aliases to
+    # the Python objects and only removed in NumPy 1.24.  Defining them should
+    # probably wait for NumPy 1.26 or 2.0.
+    # When defined, these should possibly not be added to `__all__` to avoid
+    # import with `from numpy import *`.
+    __future_scalars__ = {"str", "bytes", "object"}
+
+    __array_api_version__ = "2024.12"
+
+    from ._array_api_info import __array_namespace_info__
+
+    __all__ = list(
+        __numpy_submodules__ |
+        set(_core.__all__) |
+        set(_mat.__all__) |
+        set(lib._histograms_impl.__all__) |
+        set(lib._nanfunctions_impl.__all__) |
+        set(lib._function_base_impl.__all__) |
+        set(lib._twodim_base_impl.__all__) |
+        set(lib._shape_base_impl.__all__) |
+        set(lib._type_check_impl.__all__) |
+        set(lib._arraysetops_impl.__all__) |
+        set(lib._ufunclike_impl.__all__) |
+        set(lib._arraypad_impl.__all__) |
+        set(lib._utils_impl.__all__) |
+        set(lib._stride_tricks_impl.__all__) |
+        set(lib._polynomial_impl.__all__) |
+        set(lib._npyio_impl.__all__) |
+        set(lib._index_tricks_impl.__all__) |
+        {"emath", "show_config", "__version__", "__array_namespace_info__"}
+    )
+
+    # Filter out Cython harmless warnings
+    warnings.filterwarnings("ignore", message="numpy.dtype size changed")
+    warnings.filterwarnings("ignore", message="numpy.ufunc size changed")
+    warnings.filterwarnings("ignore", message="numpy.ndarray size changed")
+
+    def __getattr__(attr):
+        # Warn for expired attributes
+        import warnings
+
+        if attr == "linalg":
+            import numpy.linalg as linalg
+            return linalg
+        elif attr == "fft":
+            import numpy.fft as fft
+            return fft
+        elif attr == "dtypes":
+            import numpy.dtypes as dtypes
+            return dtypes
+        elif attr == "random":
+            import numpy.random as random
+            return random
+        elif attr == "polynomial":
+            import numpy.polynomial as polynomial
+            return polynomial
+        elif attr == "ma":
+            import numpy.ma as ma
+            return ma
+        elif attr == "ctypeslib":
+            import numpy.ctypeslib as ctypeslib
+            return ctypeslib
+        elif attr == "exceptions":
+            import numpy.exceptions as exceptions
+            return exceptions
+        elif attr == "testing":
+            import numpy.testing as testing
+            return testing
+        elif attr == "matlib":
+            import numpy.matlib as matlib
+            return matlib
+        elif attr == "f2py":
+            import numpy.f2py as f2py
+            return f2py
+        elif attr == "typing":
+            import numpy.typing as typing
+            return typing
+        elif attr == "rec":
+            import numpy.rec as rec
+            return rec
+        elif attr == "char":
+            import numpy.char as char
+            return char
+        elif attr == "array_api":
+            raise AttributeError("`numpy.array_api` is not available from "
+                                 "numpy 2.0 onwards", name=None)
+        elif attr == "core":
+            import numpy.core as core
+            return core
+        elif attr == "strings":
+            import numpy.strings as strings
+            return strings
+        elif attr == "distutils":
+            if 'distutils' in __numpy_submodules__:
+                import numpy.distutils as distutils
+                return distutils
+            else:
+                raise AttributeError("`numpy.distutils` is not available from "
+                                     "Python 3.12 onwards", name=None)
+
+        if attr in __future_scalars__:
+            # And future warnings for those that will change, but also give
+            # the AttributeError
+            warnings.warn(
+                f"In the future `np.{attr}` will be defined as the "
+                "corresponding NumPy scalar.", FutureWarning, stacklevel=2)
+
+        if attr in __former_attrs__:
+            raise AttributeError(__former_attrs__[attr], name=None)
+
+        if attr in __expired_attributes__:
+            raise AttributeError(
+                f"`np.{attr}` was removed in the NumPy 2.0 release. "
+                f"{__expired_attributes__[attr]}",
+                name=None
+            )
+
+        if attr == "chararray":
+            warnings.warn(
+                "`np.chararray` is deprecated and will be removed from "
+                "the main namespace in the future. Use an array with a string "
+                "or bytes dtype instead.", DeprecationWarning, stacklevel=2)
+            import numpy.char as char
+            return char.chararray
+
+        raise AttributeError(f"module {__name__!r} has no attribute {attr!r}")
+
+    def __dir__():
+        public_symbols = (
+            globals().keys() | __numpy_submodules__
         )
-        if _os.path.exists(pyarrow_libs_dir):
-            append_library_dir(pyarrow_libs_dir)
+        public_symbols -= {
+            "matrixlib", "matlib", "tests", "conftest", "version",
+            "distutils", "array_api"
+        }
+        return list(public_symbols)
 
-    # ARROW-4074: Allow for ARROW_HOME to be set to some other directory
-    if _os.environ.get('ARROW_HOME'):
-        append_library_dir(_os.path.join(_os.environ['ARROW_HOME'], 'lib'))
-    else:
-        # Python wheels bundle the Arrow libraries in the pyarrow directory.
-        append_library_dir(_os.path.dirname(_os.path.abspath(__file__)))
+    # Pytest testing
+    from numpy._pytesttester import PytestTester
+    test = PytestTester(__name__)
+    del PytestTester
 
-    return library_dirs
+    def _sanity_check():
+        """
+        Quick sanity checks for common bugs caused by environment.
+        There are some cases e.g. with wrong BLAS ABI that cause wrong
+        results under specific runtime conditions that are not necessarily
+        achieved during test suite runs, and it is useful to catch those early.
+
+        See https://github.com/numpy/numpy/issues/8577 and other
+        similar bug reports.
+
+        """
+        try:
+            x = ones(2, dtype=float32)
+            if not abs(x.dot(x) - float32(2.0)) < 1e-5:
+                raise AssertionError
+        except AssertionError:
+            msg = ("The current Numpy installation ({!r}) fails to "
+                   "pass simple sanity checks. This can be caused for example "
+                   "by incorrect BLAS library being linked in, or by mixing "
+                   "package managers (pip, conda, apt, ...). Search closed "
+                   "numpy issues for similar problems.")
+            raise RuntimeError(msg.format(__file__)) from None
+
+    _sanity_check()
+    del _sanity_check
+
+    def _mac_os_check():
+        """
+        Quick Sanity check for Mac OS look for accelerate build bugs.
+        Testing numpy polyfit calls init_dgelsd(LAPACK)
+        """
+        try:
+            c = array([3., 2., 1.])
+            x = linspace(0, 2, 5)
+            y = polyval(c, x)
+            _ = polyfit(x, y, 2, cov=True)
+        except ValueError:
+            pass
+
+    if sys.platform == "darwin":
+        from . import exceptions
+        with warnings.catch_warnings(record=True) as w:
+            _mac_os_check()
+            # Throw runtime error, if the test failed
+            # Check for warning and report the error_message
+            if len(w) > 0:
+                for _wn in w:
+                    if _wn.category is exceptions.RankWarning:
+                        # Ignore other warnings, they may not be relevant (see gh-25433)
+                        error_message = (
+                            f"{_wn.category.__name__}: {_wn.message}"
+                        )
+                        msg = (
+                            "Polyfit sanity test emitted a warning, most likely due "
+                            "to using a buggy Accelerate backend."
+                            "\nIf you compiled yourself, more information is available at:"  # noqa: E501
+                            "\nhttps://numpy.org/devdocs/building/index.html"
+                            "\nOtherwise report this to the vendor "
+                            f"that provided NumPy.\n\n{error_message}\n")
+                        raise RuntimeError(msg)
+                del _wn
+            del w
+    del _mac_os_check
+
+    def blas_fpe_check():
+        # Check if BLAS adds spurious FPEs, mostly seen on M4 arms with Accelerate.
+        with errstate(all='raise'):
+            x = ones((20, 20))
+            try:
+                x @ x
+            except FloatingPointError:
+                res = _core._multiarray_umath._blas_supports_fpe(False)
+                if res:  # res was not modified (hardcoded to True for now)
+                    warnings.warn(
+                        "Spurious warnings given by blas but suppression not "
+                        "set up on this platform. Please open a NumPy issue.",
+                        UserWarning, stacklevel=2)
+
+    blas_fpe_check()
+    del blas_fpe_check
+
+    def hugepage_setup():
+        """
+        We usually use madvise hugepages support, but on some old kernels it
+        is slow and thus better avoided. Specifically kernel version 4.6
+        had a bug fix which probably fixed this:
+        https://github.com/torvalds/linux/commit/7cf91a98e607c2f935dbcc177d70011e95b8faff
+        """
+        use_hugepage = os.environ.get("NUMPY_MADVISE_HUGEPAGE", None)
+        if sys.platform == "linux" and use_hugepage is None:
+            # If there is an issue with parsing the kernel version,
+            # set use_hugepage to 0. Usage of LooseVersion will handle
+            # the kernel version parsing better, but avoided since it
+            # will increase the import time.
+            # See: #16679 for related discussion.
+            try:
+                use_hugepage = 1
+                kernel_version = os.uname().release.split(".")[:2]
+                kernel_version = tuple(int(v) for v in kernel_version)
+                if kernel_version < (4, 6):
+                    use_hugepage = 0
+            except ValueError:
+                use_hugepage = 0
+        elif use_hugepage is None:
+            # This is not Linux, so it should not matter, just enable anyway
+            use_hugepage = 1
+        else:
+            use_hugepage = int(use_hugepage)
+        return use_hugepage
+
+    # Note that this will currently only make a difference on Linux
+    _core.multiarray._set_madvise_hugepage(hugepage_setup())
+    del hugepage_setup
+
+    # Give a warning if NumPy is reloaded or imported on a sub-interpreter
+    # We do this from python, since the C-module may not be reloaded and
+    # it is tidier organized.
+    _core.multiarray._multiarray_umath._reload_guard()
+
+    # TODO: Remove the environment variable entirely now that it is "weak"
+    if (os.environ.get("NPY_PROMOTION_STATE", "weak") != "weak"):
+        warnings.warn(
+            "NPY_PROMOTION_STATE was a temporary feature for NumPy 2.0 "
+            "transition and is ignored after NumPy 2.2.",
+            UserWarning, stacklevel=2)
+
+    # Tell PyInstaller where to find hook-numpy.py
+    def _pyinstaller_hooks_dir():
+        from pathlib import Path
+        return [str(Path(__file__).with_name("_pyinstaller").resolve())]
+
+
+# Remove symbols imported for internal use
+del os, sys, warnings

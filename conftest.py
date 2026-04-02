@@ -1,386 +1,248 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+"""
+Pytest configuration and fixtures for the Numpy test suite.
+"""
+import os
+import sys
+import tempfile
+import warnings
+from contextlib import contextmanager
+from pathlib import Path
 
+import hypothesis
 import pytest
 
-import os
-import pyarrow as pa
-from pyarrow import Codec
-from pyarrow import fs
-from pyarrow.lib import is_threading_enabled
-from pyarrow.tests.util import windows_has_tzdata
-import sys
-
-
-groups = [
-    'acero',
-    'azure',
-    'brotli',
-    'bz2',
-    'cython',
-    'dataset',
-    'hypothesis',
-    'fastparquet',
-    'flight',
-    'gandiva',
-    'gcs',
-    'gdb',
-    'gzip',
-    'hdfs',
-    'large_memory',
-    'lz4',
-    'memory_leak',
-    'nopandas',
-    'nonumpy',
-    'numpy',
-    'orc',
-    'pandas',
-    'parquet',
-    'parquet_encryption',
-    'processes',
-    'requires_testing_data',
-    's3',
-    'slow',
-    'snappy',
-    'sockets',
-    'substrait',
-    'threading',
-    'timezone_data',
-    'zstd',
-]
-
-defaults = {
-    'acero': False,
-    'azure': False,
-    'brotli': Codec.is_available('brotli'),
-    'bz2': Codec.is_available('bz2'),
-    'cython': False,
-    'dataset': False,
-    'fastparquet': False,
-    'flight': False,
-    'gandiva': False,
-    'gcs': False,
-    'gdb': True,
-    'gzip': Codec.is_available('gzip'),
-    'hdfs': False,
-    'hypothesis': False,
-    'large_memory': False,
-    'lz4': Codec.is_available('lz4'),
-    'memory_leak': False,
-    'nopandas': False,
-    'nonumpy': False,
-    'numpy': False,
-    'orc': False,
-    'pandas': False,
-    'parquet': False,
-    'parquet_encryption': False,
-    'processes': True,
-    'requires_testing_data': True,
-    's3': False,
-    'slow': False,
-    'snappy': Codec.is_available('snappy'),
-    'sockets': True,
-    'substrait': False,
-    'threading': is_threading_enabled(),
-    'timezone_data': True,
-    'zstd': Codec.is_available('zstd'),
-}
-
-if sys.platform == "emscripten":
-    # Emscripten doesn't support subprocess,
-    # multiprocessing, gdb or socket based
-    # networking
-    defaults['gdb'] = False
-    defaults['processes'] = False
-    defaults['sockets'] = False
-
-if sys.platform == "win32":
-    defaults['timezone_data'] = windows_has_tzdata()
-elif sys.platform == "emscripten":
-    defaults['timezone_data'] = os.path.exists("/usr/share/zoneinfo")
+import numpy
+from numpy._core._multiarray_tests import get_fpu_mode
+from numpy.testing._private.utils import NOGIL_BUILD
 
 try:
-    import cython  # noqa
-    defaults['cython'] = True
-except ImportError:
-    pass
+    from scipy_doctest.conftest import dt_config
+    HAVE_SCPDT = True
+except ModuleNotFoundError:
+    HAVE_SCPDT = False
 
 try:
-    import fastparquet  # noqa
-    defaults['fastparquet'] = True
-except ImportError:
-    pass
+    import pytest_run_parallel  # noqa: F401
+    PARALLEL_RUN_AVALIABLE = True
+except ModuleNotFoundError:
+    PARALLEL_RUN_AVALIABLE = False
 
-try:
-    import pyarrow.gandiva  # noqa
-    defaults['gandiva'] = True
-except ImportError:
-    pass
+_old_fpu_mode = None
+_collect_results = {}
 
-try:
-    import pyarrow.acero  # noqa
-    defaults['acero'] = True
-except ImportError:
-    pass
+# Use a known and persistent tmpdir for hypothesis' caches, which
+# can be automatically cleared by the OS or user.
+hypothesis.configuration.set_hypothesis_home_dir(
+    os.path.join(tempfile.gettempdir(), ".hypothesis")
+)
 
-try:
-    import pyarrow.dataset  # noqa
-    defaults['dataset'] = True
-except ImportError:
-    pass
+# We register two custom profiles for Numpy - for details see
+# https://hypothesis.readthedocs.io/en/latest/settings.html
+# The first is designed for our own CI runs; the latter also
+# forces determinism and is designed for use via np.test()
+hypothesis.settings.register_profile(
+    name="numpy-profile", deadline=None, print_blob=True,
+)
+hypothesis.settings.register_profile(
+    name="np.test() profile",
+    deadline=None, print_blob=True, database=None, derandomize=True,
+    suppress_health_check=list(hypothesis.HealthCheck),
+)
+# Note that the default profile is chosen based on the presence
+# of pytest.ini, but can be overridden by passing the
+# --hypothesis-profile=NAME argument to pytest.
+_pytest_ini = os.path.join(os.path.dirname(__file__), "..", "pytest.ini")
+hypothesis.settings.load_profile(
+    "numpy-profile" if os.path.isfile(_pytest_ini) else "np.test() profile"
+)
 
-try:
-    import pyarrow.orc  # noqa
-    if sys.platform == "win32":
-        defaults['orc'] = True
-    else:
-        # orc tests on non-Windows platforms only work
-        # if timezone data exists, so skip them if
-        # not.
-        defaults['orc'] = defaults['timezone_data']
-except ImportError:
-    pass
+# The experimentalAPI is used in _umath_tests
+os.environ["NUMPY_EXPERIMENTAL_DTYPE_API"] = "1"
 
-try:
-    import pandas  # noqa
-    defaults['pandas'] = True
-except ImportError:
-    defaults['nopandas'] = True
-
-try:
-    import numpy  # noqa
-    defaults['numpy'] = True
-except ImportError:
-    defaults['nonumpy'] = True
-
-try:
-    import pyarrow.parquet  # noqa
-    defaults['parquet'] = True
-except ImportError:
-    pass
-
-try:
-    import pyarrow.parquet.encryption  # noqa
-    defaults['parquet_encryption'] = True
-except ImportError:
-    pass
-
-try:
-    import pyarrow.flight  # noqa
-    defaults['flight'] = True
-except ImportError:
-    pass
-
-try:
-    from pyarrow.fs import AzureFileSystem  # noqa
-    defaults['azure'] = True
-except ImportError:
-    pass
-
-try:
-    from pyarrow.fs import GcsFileSystem  # noqa
-    defaults['gcs'] = True
-except ImportError:
-    pass
-
-try:
-    from pyarrow.fs import S3FileSystem  # noqa
-    defaults['s3'] = True
-except ImportError:
-    pass
-
-try:
-    from pyarrow.fs import HadoopFileSystem  # noqa
-    defaults['hdfs'] = True
-except ImportError:
-    pass
-
-try:
-    import pyarrow.substrait  # noqa
-    defaults['substrait'] = True
-except ImportError:
-    pass
+def pytest_configure(config):
+    config.addinivalue_line("markers",
+        "valgrind_error: Tests that are known to error under valgrind.")
+    config.addinivalue_line("markers",
+        "leaks_references: Tests that are known to leak references.")
+    config.addinivalue_line("markers",
+        "slow: Tests that are very slow.")
+    config.addinivalue_line("markers",
+        "slow_pypy: Tests that are very slow on pypy.")
+    if not PARALLEL_RUN_AVALIABLE:
+        config.addinivalue_line("markers",
+            "parallel_threads(n): run the given test function in parallel "
+            "using `n` threads.",
+        )
+        config.addinivalue_line("markers",
+            "iterations(n): run the given test function `n` times in each thread",
+        )
+        config.addinivalue_line("markers",
+            "thread_unsafe: mark the test function as single-threaded",
+        )
 
 
-# Doctest should ignore files for the modules that are not built
-def pytest_ignore_collect(collection_path, config):
-    if config.option.doctestmodules:
-        # don't try to run doctests on the /tests directory
-        if "/pyarrow/tests/" in str(collection_path):
-            return True
-
-        doctest_groups = [
-            'dataset',
-            'orc',
-            'parquet',
-            'flight',
-            'substrait',
-        ]
-
-        # handle cuda, flight, etc
-        for group in doctest_groups:
-            if f'pyarrow/{group}' in str(collection_path):
-                if not defaults[group]:
-                    return True
-
-        if 'pyarrow/parquet/encryption' in str(collection_path):
-            if not defaults['parquet_encryption']:
-                return True
-
-        if 'pyarrow/cuda' in str(collection_path):
-            try:
-                import pyarrow.cuda  # noqa
-                return False
-            except ImportError:
-                return True
-
-        if 'pyarrow/fs' in str(collection_path):
-            try:
-                from pyarrow.fs import S3FileSystem  # noqa
-                return False
-            except ImportError:
-                return True
-
-    if getattr(config.option, "doctest_cython", False):
-        if "/pyarrow/tests/" in str(collection_path):
-            return True
-        if "/pyarrow/_parquet_encryption" in str(collection_path):
-            return True
-
-    return False
+def pytest_addoption(parser):
+    parser.addoption("--available-memory", action="store", default=None,
+                     help=("Set amount of memory available for running the "
+                           "test suite. This can result to tests requiring "
+                           "especially large amounts of memory to be skipped. "
+                           "Equivalent to setting environment variable "
+                           "NPY_AVAILABLE_MEM. Default: determined"
+                           "automatically."))
 
 
-# Save output files from doctest examples into temp dir
+gil_enabled_at_start = True
+if NOGIL_BUILD:
+    gil_enabled_at_start = sys._is_gil_enabled()
+
+
+def pytest_sessionstart(session):
+    available_mem = session.config.getoption('available_memory')
+    if available_mem is not None:
+        os.environ['NPY_AVAILABLE_MEM'] = available_mem
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    if NOGIL_BUILD and not gil_enabled_at_start and sys._is_gil_enabled():
+        tr = terminalreporter
+        tr.ensure_newline()
+        tr.section("GIL re-enabled", sep="=", red=True, bold=True)
+        tr.line("The GIL was re-enabled at runtime during the tests.")
+        tr.line("This can happen with no test failures if the RuntimeWarning")
+        tr.line("raised by Python when this happens is filtered by a test.")
+        tr.line("")
+        tr.line("Please ensure all new C modules declare support for running")
+        tr.line("without the GIL. Any new tests that intentionally imports ")
+        tr.line("code that re-enables the GIL should do so in a subprocess.")
+        pytest.exit("GIL re-enabled during tests", returncode=1)
+
+# FIXME when yield tests are gone.
+@pytest.hookimpl(tryfirst=True)
+def pytest_itemcollected(item):
+    """
+    Check FPU precision mode was not changed during test collection.
+
+    The clumsy way we do it here is mainly necessary because numpy
+    still uses yield tests, which can execute code at test collection
+    time.
+    """
+    global _old_fpu_mode
+
+    mode = get_fpu_mode()
+
+    if _old_fpu_mode is None:
+        _old_fpu_mode = mode
+    elif mode != _old_fpu_mode:
+        _collect_results[item] = (_old_fpu_mode, mode)
+        _old_fpu_mode = mode
+
+    # mark f2py tests as thread unsafe
+    if Path(item.fspath).parent == Path(__file__).parent / 'f2py' / 'tests':
+        item.add_marker(pytest.mark.thread_unsafe(
+            reason="f2py tests are thread-unsafe"))
+
+
+@pytest.fixture(scope="function", autouse=True)
+def check_fpu_mode(request):
+    """
+    Check FPU precision mode was not changed during the test.
+    """
+    old_mode = get_fpu_mode()
+    yield
+    new_mode = get_fpu_mode()
+
+    if old_mode != new_mode:
+        raise AssertionError(f"FPU precision mode changed from {old_mode:#x} to "
+                             f"{new_mode:#x} during the test")
+
+    collect_result = _collect_results.get(request.node)
+    if collect_result is not None:
+        old_mode, new_mode = collect_result
+        raise AssertionError(f"FPU precision mode changed from {old_mode:#x} to "
+                             f"{new_mode:#x} when collecting the test")
+
+
 @pytest.fixture(autouse=True)
-def _docdir(request):
+def add_np(doctest_namespace):
+    doctest_namespace['np'] = numpy
 
-    # Trigger ONLY for the doctests
-    doctest_m = request.config.option.doctestmodules
-    doctest_c = getattr(request.config.option, "doctest_cython", False)
 
-    if doctest_m or doctest_c:
+if HAVE_SCPDT:
 
-        # Get the fixture dynamically by its name.
-        tmpdir = request.getfixturevalue('tmpdir')
+    @contextmanager
+    def warnings_errors_and_rng(test=None):
+        """Filter out the wall of DeprecationWarnings.
+        """
+        msgs = ["The numpy.linalg.linalg",
+                "The numpy.fft.helper",
+                "dep_util",
+                "pkg_resources",
+                "numpy.core.umath",
+                "msvccompiler",
+                "Deprecated call",
+                "numpy.core",
+                "Importing from numpy.matlib",
+                "This function is deprecated.",    # random_integers
+                "Data type alias 'a'",     # numpy.rec.fromfile
+                "Arrays of 2-dimensional vectors",   # matlib.cross
+                "NumPy warning suppression and assertion utilities are deprecated."
+        ]
+        msg = "|".join(msgs)
 
-        # Chdir only for the duration of the test.
-        with tmpdir.as_cwd():
+        msgs_r = [
+            "invalid value encountered",
+            "divide by zero encountered"
+        ]
+        msg_r = "|".join(msgs_r)
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                'ignore', category=DeprecationWarning, message=msg
+            )
+            warnings.filterwarnings(
+                'ignore', category=RuntimeWarning, message=msg_r
+            )
             yield
 
-    else:
-        yield
+    # find and check doctests under this context manager
+    dt_config.user_context_mgr = warnings_errors_and_rng
 
+    # numpy specific tweaks from refguide-check
+    dt_config.rndm_markers.add('#uninitialized')
+    dt_config.rndm_markers.add('# uninitialized')
 
-# Define doctest_namespace for fs module docstring import
-@pytest.fixture(autouse=True)
-def add_fs(doctest_namespace, request, tmp_path):
+    # make the checker pick on mismatched dtypes
+    dt_config.strict_check = True
 
-    # Trigger ONLY for the doctests
-    doctest_m = request.config.option.doctestmodules
-    doctest_c = getattr(request.config.option, "doctest_cython", False)
+    import doctest
+    dt_config.optionflags = doctest.NORMALIZE_WHITESPACE | doctest.ELLIPSIS
 
-    if doctest_m or doctest_c:
-        # fs import
-        doctest_namespace["fs"] = fs
+    # recognize the StringDType repr
+    dt_config.check_namespace['StringDType'] = numpy.dtypes.StringDType
 
-        # Creation of an object and file with data
-        local = fs.LocalFileSystem()
-        path = tmp_path / 'pyarrow-fs-example.dat'
-        with local.open_output_stream(str(path)) as stream:
-            stream.write(b'data')
-        doctest_namespace["local"] = local
-        doctest_namespace["local_path"] = str(tmp_path)
-        doctest_namespace["path"] = str(path)
-    yield
+    # temporary skips
+    dt_config.skiplist = {
+        'numpy.savez',    # unclosed file
+        'numpy.matlib.savez',
+        'numpy.__array_namespace_info__',
+        'numpy.matlib.__array_namespace_info__',
+    }
 
+    # xfail problematic tutorials
+    dt_config.pytest_extra_xfail = {
+        'how-to-verify-bug.rst': '',
+        'c-info.ufunc-tutorial.rst': '',
+        'basics.interoperability.rst': 'needs pandas',
+        'basics.dispatch.rst': 'errors out in /testing/overrides.py',
+        'basics.subclassing.rst': '.. testcode:: admonitions not understood',
+        'misc.rst': 'manipulates warnings',
+    }
 
-# Define udf fixture for test_udf.py and test_substrait.py
-@pytest.fixture(scope="session")
-def unary_func_fixture():
-    """
-    Register a unary scalar function.
-    """
-    from pyarrow import compute as pc
-
-    def unary_function(ctx, x):
-        return pc.call_function("add", [x, 1],
-                                memory_pool=ctx.memory_pool)
-    func_name = "y=x+1"
-    unary_doc = {"summary": "add function",
-                 "description": "test add function"}
-    pc.register_scalar_function(unary_function,
-                                func_name,
-                                unary_doc,
-                                {"array": pa.int64()},
-                                pa.int64())
-    return unary_function, func_name
-
-
-@pytest.fixture(scope="session")
-def unary_agg_func_fixture():
-    """
-    Register a unary aggregate function (mean)
-    """
-    from pyarrow import compute as pc
-    import numpy as np
-
-    def func(ctx, x):
-        return pa.scalar(np.nanmean(x))
-
-    func_name = "mean_udf"
-    func_doc = {"summary": "y=avg(x)",
-                "description": "find mean of x"}
-
-    pc.register_aggregate_function(func,
-                                   func_name,
-                                   func_doc,
-                                   {
-                                       "x": pa.float64(),
-                                   },
-                                   pa.float64()
-                                   )
-    return func, func_name
-
-
-@pytest.fixture(scope="session")
-def varargs_agg_func_fixture():
-    """
-    Register a unary aggregate function
-    """
-    from pyarrow import compute as pc
-    import numpy as np
-
-    def func(ctx, *args):
-        sum = 0.0
-        for arg in args:
-            sum += np.nanmean(arg)
-        return pa.scalar(sum)
-
-    func_name = "sum_mean"
-    func_doc = {"summary": "Varargs aggregate",
-                "description": "Varargs aggregate"}
-
-    pc.register_aggregate_function(func,
-                                   func_name,
-                                   func_doc,
-                                   {
-                                       "x": pa.int64(),
-                                       "y": pa.float64()
-                                   },
-                                   pa.float64()
-                                   )
-    return func, func_name
+    # ignores are for things fail doctest collection (optionals etc)
+    dt_config.pytest_extra_ignore = [
+        'numpy/distutils',
+        'numpy/_core/cversions.py',
+        'numpy/_pyinstaller',
+        'numpy/random/_examples',
+        'numpy/f2py/_backends/_distutils.py',
+    ]
