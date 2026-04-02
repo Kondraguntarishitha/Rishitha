@@ -1,16 +1,27 @@
-# ruff: noqa
-__version__ = "6.0.0"
+# ruff: noqa: F403, F405
+# The contents of this file are automatically written by
+# tools/generate_schema_wrapper.py. Do not modify directly.
 
-# The content of __all__ is automatically written by
-# tools/update_init_file.py. Do not modify directly.
+from altair.vegalite.v6.schema import channels, core
+from altair.vegalite.v6.schema.channels import *
+from altair.vegalite.v6.schema.core import *
+
+SCHEMA_VERSION = "v6.1.0"
+
+SCHEMA_URL = "https://vega.github.io/schema/vega-lite/v6.1.0.json"
+
 __all__ = [
+    "SCHEMA_URL",
+    "SCHEMA_VERSION",
+    "URI",
+    "X2",
+    "Y2",
     "Aggregate",
     "AggregateOp",
     "AggregateTransform",
     "AggregatedFieldDef",
     "Align",
     "AllSortString",
-    "AltairDeprecationWarning",
     "Angle",
     "AngleDatum",
     "AngleValue",
@@ -29,7 +40,6 @@ __all__ = [
     "BarConfig",
     "BaseTitleNoValueRefs",
     "Baseline",
-    "Bin",
     "BinExtent",
     "BinParams",
     "BinTransform",
@@ -47,9 +57,6 @@ __all__ = [
     "BrushConfig",
     "CalculateTransform",
     "Categorical",
-    "ChainedWhen",
-    "Chart",
-    "ChartDataType",
     "Color",
     "ColorDatum",
     "ColorDef",
@@ -60,7 +67,6 @@ __all__ = [
     "CompositeMark",
     "CompositeMarkDef",
     "CompositionConfig",
-    "ConcatChart",
     "ConcatSpecGenericSpec",
     "ConditionalAxisColor",
     "ConditionalAxisLabelAlign",
@@ -122,7 +128,6 @@ __all__ = [
     "Data",
     "DataFormat",
     "DataSource",
-    "DataType",
     "Datasets",
     "DateTime",
     "DatumChannelMixin",
@@ -133,7 +138,6 @@ __all__ = [
     "Description",
     "DescriptionValue",
     "Detail",
-    "Dict",
     "DictInlineDataset",
     "DictSelectionInit",
     "DictSelectionInitInterval",
@@ -156,10 +160,8 @@ __all__ = [
     "ExprRef",
     "ExtentTransform",
     "Facet",
-    "FacetChart",
     "FacetEncodingFieldDef",
     "FacetFieldDef",
-    "FacetMapping",
     "FacetSpec",
     "FacetedEncoding",
     "FacetedUnitSpec",
@@ -215,14 +217,12 @@ __all__ = [
     "GradientStop",
     "GraticuleGenerator",
     "GraticuleParams",
-    "HConcatChart",
     "HConcatSpecGenericSpec",
     "Header",
     "HeaderConfig",
     "HexColor",
     "Href",
     "HrefValue",
-    "Impute",
     "ImputeMethod",
     "ImputeParams",
     "ImputeSequence",
@@ -235,7 +235,6 @@ __all__ = [
     "JoinAggregateFieldDef",
     "JoinAggregateTransform",
     "JsonDataFormat",
-    "JupyterChart",
     "Key",
     "LabelOverlap",
     "LatLongDef",
@@ -245,7 +244,6 @@ __all__ = [
     "Latitude2Datum",
     "Latitude2Value",
     "LatitudeDatum",
-    "LayerChart",
     "LayerRepeatMapping",
     "LayerRepeatSpec",
     "LayerSpec",
@@ -271,7 +269,6 @@ __all__ = [
     "Longitude2Datum",
     "Longitude2Value",
     "LongitudeDatum",
-    "LookupData",
     "LookupSelection",
     "LookupTransform",
     "Mark",
@@ -283,7 +280,6 @@ __all__ = [
     "MarkPropDefnumberArray",
     "MarkPropDefstringnullTypeForShape",
     "MarkType",
-    "MaxRowsError",
     "MergedStream",
     "Month",
     "MultiLineString",
@@ -310,8 +306,6 @@ __all__ = [
     "Orientation",
     "OverlayMarkDef",
     "Padding",
-    "Parameter",
-    "ParameterExpression",
     "ParameterExtent",
     "ParameterName",
     "ParameterPredicate",
@@ -353,7 +347,6 @@ __all__ = [
     "RectConfig",
     "RegressionTransform",
     "RelativeBandSize",
-    "RepeatChart",
     "RepeatMapping",
     "RepeatRef",
     "RepeatSpec",
@@ -365,8 +358,6 @@ __all__ = [
     "RowColboolean",
     "RowColnumber",
     "RowColumnEncodingFieldDef",
-    "SCHEMA_URL",
-    "SCHEMA_VERSION",
     "SampleTransform",
     "Scale",
     "ScaleBinParams",
@@ -419,13 +410,11 @@ __all__ = [
     "SchemeParams",
     "SecondaryFieldDef",
     "SelectionConfig",
-    "SelectionExpression",
     "SelectionInit",
     "SelectionInitInterval",
     "SelectionInitIntervalMapping",
     "SelectionInitMapping",
     "SelectionParameter",
-    "SelectionPredicateComposition",
     "SelectionResolution",
     "SelectionType",
     "SequenceGenerator",
@@ -476,14 +465,12 @@ __all__ = [
     "StrokeWidthValue",
     "StyleConfigIndex",
     "SymbolShape",
-    "TOPLEVEL_ONLY_KEYS",
     "Text",
     "TextBaseline",
     "TextDatum",
     "TextDef",
     "TextDirection",
     "TextValue",
-    "Then",
     "Theta",
     "Theta2",
     "Theta2Datum",
@@ -503,7 +490,6 @@ __all__ = [
     "TimeUnitParams",
     "TimeUnitTransform",
     "TimeUnitTransformParams",
-    "Title",
     "TitleAnchor",
     "TitleConfig",
     "TitleFrame",
@@ -516,7 +502,6 @@ __all__ = [
     "TopLevelFacetSpec",
     "TopLevelHConcatSpec",
     "TopLevelLayerSpec",
-    "TopLevelMixin",
     "TopLevelParameter",
     "TopLevelRepeatSpec",
     "TopLevelSelectionParameter",
@@ -528,8 +513,6 @@ __all__ = [
     "Type",
     "TypeForShape",
     "TypedFieldDef",
-    "URI",
-    "Undefined",
     "UnitSpec",
     "UnitSpecWithFrame",
     "Url",
@@ -537,11 +520,7 @@ __all__ = [
     "UrlValue",
     "UtcMultiTimeUnit",
     "UtcSingleTimeUnit",
-    "VConcatChart",
     "VConcatSpecGenericSpec",
-    "VEGAEMBED_VERSION",
-    "VEGALITE_VERSION",
-    "VEGA_VERSION",
     "ValueChannelMixin",
     "ValueDefWithConditionMarkPropFieldOrDatumDefGradientstringnull",
     "ValueDefWithConditionMarkPropFieldOrDatumDefTypeForShapestringnull",
@@ -552,8 +531,6 @@ __all__ = [
     "ValueDefnumber",
     "ValueDefnumberwidthheightExprRef",
     "VariableParameter",
-    "Vector10string",
-    "Vector12string",
     "Vector2DateTime",
     "Vector2Vector2number",
     "Vector2boolean",
@@ -561,17 +538,16 @@ __all__ = [
     "Vector2string",
     "Vector3number",
     "Vector7string",
-    "VegaLite",
+    "Vector10string",
+    "Vector12string",
     "VegaLiteSchema",
     "ViewBackground",
     "ViewConfig",
-    "When",
     "WindowEventType",
     "WindowFieldDef",
     "WindowOnlyOp",
     "WindowTransform",
     "X",
-    "X2",
     "X2Datum",
     "X2Value",
     "XDatum",
@@ -584,7 +560,6 @@ __all__ = [
     "XOffsetValue",
     "XValue",
     "Y",
-    "Y2",
     "Y2Datum",
     "Y2Value",
     "YDatum",
@@ -596,109 +571,8 @@ __all__ = [
     "YOffsetDatum",
     "YOffsetValue",
     "YValue",
-    "api",
-    "binding",
-    "binding_checkbox",
-    "binding_radio",
-    "binding_range",
-    "binding_select",
     "channels",
-    "check_fields_and_encodings",
-    "compiler",
-    "concat",
-    "condition",
     "core",
-    "data",
-    "data_transformers",
-    "datasets",
-    "datum",
-    "default_data_transformer",
-    "display",
-    "expr",
-    "graticule",
-    "hconcat",
-    "jupyter",
-    "layer",
-    "limit_rows",
-    "load_ipython_extension",
     "load_schema",
-    "mixins",
-    "param",
-    "parse_shorthand",
-    "renderers",
-    "repeat",
-    "sample",
-    "schema",
-    "selection_interval",
-    "selection_point",
-    "sequence",
-    "sphere",
-    "theme",
-    "to_csv",
-    "to_json",
-    "to_values",
-    "topo_feature",
-    "typing",
-    "utils",
-    "v6",
-    "value",
-    "vconcat",
-    "vegalite",
-    "vegalite_compilers",
-    "when",
     "with_property_setters",
 ]
-
-
-def __dir__():
-    return __all__
-
-
-from altair.vegalite import *
-from altair.vegalite.v6.schema.core import Dict
-from altair.jupyter import JupyterChart
-from altair.expr import expr
-from altair.utils import AltairDeprecationWarning, parse_shorthand, Undefined
-from altair import datasets, theme, typing
-
-
-def load_ipython_extension(ipython):
-    from altair._magics import vegalite
-
-    ipython.register_magic_function(vegalite, "cell")
-
-
-def __getattr__(name: str):
-    from altair.utils.deprecation import deprecated_warn
-
-    if name == "themes":
-        deprecated_warn(
-            "Most cases require only the following change:\n\n"
-            "    # Deprecated\n"
-            "    alt.themes.enable('quartz')\n\n"
-            "    # Updated\n"
-            "    alt.theme.enable('quartz')\n\n"
-            "If your code registers a theme, make the following change:\n\n"
-            "    # Deprecated\n"
-            "    def custom_theme():\n"
-            "        return {'height': 400, 'width': 700}\n"
-            "    alt.themes.register('theme_name', custom_theme)\n"
-            "    alt.themes.enable('theme_name')\n\n"
-            "    # Updated\n"
-            "    @alt.theme.register('theme_name', enable=True)\n"
-            "    def custom_theme():\n"
-            "        return alt.theme.ThemeConfig(\n"
-            "            {'height': 400, 'width': 700}\n"
-            "        )\n\n"
-            "See the updated User Guide for further details:\n"
-            "    https://altair-viz.github.io/user_guide/api.html#theme\n"
-            "    https://altair-viz.github.io/user_guide/customization.html#chart-themes",
-            version="5.5.0",
-            alternative="altair.theme",
-            stacklevel=3,
-            action="once",
-        )
-        return theme._themes
-    else:
-        msg = f"module {__name__!r} has no attribute {name!r}"
-        raise AttributeError(msg)
