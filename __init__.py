@@ -1,87 +1,193 @@
-"""Pillow (Fork of the Python Imaging Library)
-
-Pillow is the friendly PIL fork by Jeffrey A. Clark and contributors.
-    https://github.com/python-pillow/Pillow/
-
-Pillow is forked from PIL 1.1.7.
-
-PIL is the Python Imaging Library by Fredrik Lundh and contributors.
-Copyright (c) 1999 by Secret Labs AB.
-
-Use PIL.__version__ for this Pillow version.
-
-;-)
-"""
-
 from __future__ import annotations
 
-from . import _version
+import typing as _t
 
-# VERSION was removed in Pillow 6.0.0.
-# PILLOW_VERSION was removed in Pillow 9.0.0.
-# Use __version__ instead.
-__version__ = _version.__version__
-del _version
+from narwhals import dependencies, dtypes, exceptions, selectors
+from narwhals._utils import (
+    Implementation,
+    generate_temporary_column_name,
+    is_ordered_categorical,
+    maybe_align_index,
+    maybe_convert_dtypes,
+    maybe_get_index,
+    maybe_reset_index,
+    maybe_set_index,
+)
+from narwhals.dataframe import DataFrame, LazyFrame
+from narwhals.dtypes import (
+    Array,
+    Binary,
+    Boolean,
+    Categorical,
+    Date,
+    Datetime,
+    Decimal,
+    Duration,
+    Enum,
+    Field,
+    Float32,
+    Float64,
+    Int8,
+    Int16,
+    Int32,
+    Int64,
+    Int128,
+    List,
+    Object,
+    String,
+    Struct,
+    Time,
+    UInt8,
+    UInt16,
+    UInt32,
+    UInt64,
+    UInt128,
+    Unknown,
+)
+from narwhals.expr import Expr
+from narwhals.functions import (
+    all_ as all,
+    all_horizontal,
+    any_horizontal,
+    coalesce,
+    col,
+    concat,
+    concat_str,
+    exclude,
+    format,
+    from_arrow,
+    from_dict,
+    from_dicts,
+    from_numpy,
+    len_ as len,
+    lit,
+    max,
+    max_horizontal,
+    mean,
+    mean_horizontal,
+    median,
+    min,
+    min_horizontal,
+    new_series,
+    nth,
+    read_csv,
+    read_parquet,
+    scan_csv,
+    scan_parquet,
+    show_versions,
+    sum,
+    sum_horizontal,
+    when,
+)
+from narwhals.schema import Schema
+from narwhals.series import Series
+from narwhals.translate import (
+    from_native,
+    get_native_namespace,
+    narwhalify,
+    to_native,
+    to_py_scalar,
+)
 
+__version__: str
 
-_plugins = [
-    "AvifImagePlugin",
-    "BlpImagePlugin",
-    "BmpImagePlugin",
-    "BufrStubImagePlugin",
-    "CurImagePlugin",
-    "DcxImagePlugin",
-    "DdsImagePlugin",
-    "EpsImagePlugin",
-    "FitsImagePlugin",
-    "FliImagePlugin",
-    "FpxImagePlugin",
-    "FtexImagePlugin",
-    "GbrImagePlugin",
-    "GifImagePlugin",
-    "GribStubImagePlugin",
-    "Hdf5StubImagePlugin",
-    "IcnsImagePlugin",
-    "IcoImagePlugin",
-    "ImImagePlugin",
-    "ImtImagePlugin",
-    "IptcImagePlugin",
-    "JpegImagePlugin",
-    "Jpeg2KImagePlugin",
-    "McIdasImagePlugin",
-    "MicImagePlugin",
-    "MpegImagePlugin",
-    "MpoImagePlugin",
-    "MspImagePlugin",
-    "PalmImagePlugin",
-    "PcdImagePlugin",
-    "PcxImagePlugin",
-    "PdfImagePlugin",
-    "PixarImagePlugin",
-    "PngImagePlugin",
-    "PpmImagePlugin",
-    "PsdImagePlugin",
-    "QoiImagePlugin",
-    "SgiImagePlugin",
-    "SpiderImagePlugin",
-    "SunImagePlugin",
-    "TgaImagePlugin",
-    "TiffImagePlugin",
-    "WebPImagePlugin",
-    "WmfImagePlugin",
-    "XbmImagePlugin",
-    "XpmImagePlugin",
-    "XVThumbImagePlugin",
+__all__ = [
+    "Array",
+    "Binary",
+    "Boolean",
+    "Categorical",
+    "DataFrame",
+    "Date",
+    "Datetime",
+    "Decimal",
+    "Duration",
+    "Enum",
+    "Expr",
+    "Field",
+    "Float32",
+    "Float64",
+    "Implementation",
+    "Int8",
+    "Int16",
+    "Int32",
+    "Int64",
+    "Int128",
+    "LazyFrame",
+    "List",
+    "Object",
+    "Schema",
+    "Series",
+    "String",
+    "Struct",
+    "Time",
+    "UInt8",
+    "UInt16",
+    "UInt32",
+    "UInt64",
+    "UInt128",
+    "Unknown",
+    "all",
+    "all_horizontal",
+    "any_horizontal",
+    "coalesce",
+    "col",
+    "concat",
+    "concat_str",
+    "dependencies",
+    "dtypes",
+    "exceptions",
+    "exclude",
+    "format",
+    "from_arrow",
+    "from_dict",
+    "from_dicts",
+    "from_native",
+    "from_numpy",
+    "generate_temporary_column_name",
+    "get_native_namespace",
+    "is_ordered_categorical",
+    "len",
+    "lit",
+    "max",
+    "max_horizontal",
+    "maybe_align_index",
+    "maybe_convert_dtypes",
+    "maybe_get_index",
+    "maybe_reset_index",
+    "maybe_set_index",
+    "mean",
+    "mean_horizontal",
+    "median",
+    "min",
+    "min_horizontal",
+    "narwhalify",
+    "new_series",
+    "nth",
+    "read_csv",
+    "read_parquet",
+    "scan_csv",
+    "scan_parquet",
+    "selectors",
+    "show_versions",
+    "sum",
+    "sum_horizontal",
+    "to_native",
+    "to_py_scalar",
+    "when",
 ]
 
 
-class UnidentifiedImageError(OSError):
-    """
-    Raised in :py:meth:`PIL.Image.open` if an image cannot be opened and identified.
+if not _t.TYPE_CHECKING:
 
-    If a PNG image raises this error, setting :data:`.ImageFile.LOAD_TRUNCATED_IMAGES`
-    to true may allow the image to be opened after all. The setting will ignore missing
-    data and checksum failures.
-    """
+    def __getattr__(name: str) -> _t.Any:
+        if name == "__version__":
+            global __version__  # noqa: PLW0603
 
-    pass
+            from importlib import metadata
+
+            __version__ = metadata.version(__name__)
+            return __version__
+        msg = f"module {__name__!r} has no attribute {name!r}"
+        raise AttributeError(msg)
+else:  # pragma: no cover
+    ...
