@@ -1,108 +1,279 @@
-# Copyright (c) Streamlit Inc. (2018-2022) Snowflake Inc. (2022-2026)
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+#   http://www.apache.org/licenses/LICENSE-2.0
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
 
-"""A bunch of useful utilities."""
+# Miscellaneous utility code
 
-from __future__ import annotations
-
-import dataclasses
+import os
+import contextlib
 import functools
-import hashlib
-from typing import TYPE_CHECKING, Any
-
-from streamlit.proto.RootContainer_pb2 import RootContainer
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
-
-    from streamlit.delta_generator import DeltaGenerator
+import gc
+import socket
+import sys
+import textwrap
+import types
+import warnings
 
 
-def memoize(func: Callable[..., Any]) -> Callable[..., Any]:
-    """Decorator to memoize the result of a no-args func."""
-    result: list[Any] = []
-
-    @functools.wraps(func)
-    def wrapped_func() -> Any:
-        if not result:
-            result.append(func())
-        return result[0]
-
-    return wrapped_func
+_DEPR_MSG = (
+    "pyarrow.{} is deprecated as of {}, please use pyarrow.{} instead."
+)
 
 
-def repr_(self: Any) -> str:
-    """A clean repr for a class, excluding both values that are likely defaults,
-    and those explicitly default for dataclasses.
+def doc(*docstrings, **params):
     """
-    classname = self.__class__.__name__
-    # Most of the falsey value, but excluding 0 and 0.0, since those often have
-    # semantic meaning within streamlit.
-    defaults: list[Any] = [None, "", False, [], set(), {}]
-    if dataclasses.is_dataclass(self):
-        fields_vals = (
-            (f.name, getattr(self, f.name))
-            for f in dataclasses.fields(self)
-            if f.repr
-            and getattr(self, f.name) != f.default
-            and getattr(self, f.name) not in defaults
+    A decorator that takes docstring templates, concatenates them, and finally
+    performs string substitution on them.
+    This decorator will add a variable "_docstring_components" to the wrapped
+    callable to keep track of the original docstring template for potential future use.
+    If the docstring is a template, it will be saved as a string.
+    Otherwise, it will be saved as a callable and the docstring will be obtained via
+    the __doc__ attribute.
+    This decorator cannot be used on Cython classes due to a CPython constraint,
+    which enforces the __doc__ attribute to be read-only.
+    See https://github.com/python/cpython/issues/91309
+
+    Parameters
+    ----------
+    *docstrings : None, str, or callable
+        The string / docstring / docstring template to be prepended in order
+        before the default docstring under the callable.
+    **params
+        The key/value pairs used to format the docstring template.
+    """
+
+    def decorator(decorated):
+        docstring_components = []
+
+        # collect docstrings and docstring templates
+        for docstring in docstrings:
+            if docstring is None:
+                continue
+            if hasattr(docstring, "_docstring_components"):
+                docstring_components.extend(
+                    docstring._docstring_components
+                )
+            elif isinstance(docstring, str) or docstring.__doc__:
+                docstring_components.append(docstring)
+
+        # append the callable's docstring last
+        if decorated.__doc__:
+            docstring_components.append(textwrap.dedent(decorated.__doc__))
+
+        params_applied = [
+            component.format(**params)
+            if isinstance(component, str) and len(params) > 0
+            else component
+            for component in docstring_components
+        ]
+
+        decorated.__doc__ = "".join(
+            [
+                component
+                if isinstance(component, str)
+                else textwrap.dedent(component.__doc__ or "")
+                for component in params_applied
+            ]
         )
+
+        decorated._docstring_components = (
+            docstring_components
+        )
+        return decorated
+
+    return decorator
+
+
+def _deprecate_api(old_name, new_name, api, next_version, type=FutureWarning):
+    msg = _DEPR_MSG.format(old_name, next_version, new_name)
+
+    def wrapper(*args, **kwargs):
+        warnings.warn(msg, type)
+        return api(*args, **kwargs)
+    return wrapper
+
+
+def _deprecate_class(old_name, new_class, next_version,
+                     instancecheck=True):
+    """
+    Raise warning if a deprecated class is used in an isinstance check.
+    """
+    class _DeprecatedMeta(type):
+        def __instancecheck__(self, other):
+            warnings.warn(
+                _DEPR_MSG.format(old_name, next_version, new_class.__name__),
+                FutureWarning,
+                stacklevel=2
+            )
+            return isinstance(other, new_class)
+
+    return _DeprecatedMeta(old_name, (new_class,), {})
+
+
+def _is_iterable(obj):
+    try:
+        iter(obj)
+        return True
+    except TypeError:
+        return False
+
+
+def _is_path_like(path):
+    return isinstance(path, str) or hasattr(path, '__fspath__')
+
+
+def _stringify_path(path):
+    """
+    Convert *path* to a string or unicode path if possible.
+    """
+    if isinstance(path, str):
+        return os.path.expanduser(path)
+
+    # checking whether path implements the filesystem protocol
+    try:
+        return os.path.expanduser(path.__fspath__())
+    except AttributeError:
+        pass
+
+    raise TypeError("not a path-like object")
+
+
+def product(seq):
+    """
+    Return a product of sequence items.
+    """
+    return functools.reduce(lambda a, b: a*b, seq, 1)
+
+
+def get_contiguous_span(shape, strides, itemsize):
+    """
+    Return a contiguous span of N-D array data.
+
+    Parameters
+    ----------
+    shape : tuple
+    strides : tuple
+    itemsize : int
+      Specify array shape data
+
+    Returns
+    -------
+    start, end : int
+      The span end points.
+    """
+    if not strides:
+        start = 0
+        end = itemsize * product(shape)
     else:
-        fields_vals = ((f, v) for (f, v) in self.__dict__.items() if v not in defaults)
+        start = 0
+        end = itemsize
+        for i, dim in enumerate(shape):
+            if dim == 0:
+                start = end = 0
+                break
+            stride = strides[i]
+            if stride > 0:
+                end += stride * (dim - 1)
+            elif stride < 0:
+                start += stride * (dim - 1)
+        if end - start != itemsize * product(shape):
+            raise ValueError('array data is non-contiguous')
+    return start, end
 
-    field_reprs = ", ".join(f"{field}={value!r}" for field, value in fields_vals)
-    return f"{classname}({field_reprs})"
+
+def find_free_port():
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    with contextlib.closing(sock) as sock:
+        sock.bind(('', 0))
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        return sock.getsockname()[1]
 
 
-def calc_md5(s: bytes | str) -> str:
-    """Return the md5 hash of the given string.
+def guid():
+    from uuid import uuid4
+    return uuid4().hex
 
-    This should not be used for security-related purposes.
+
+def _break_traceback_cycle_from_frame(frame):
+    # Clear local variables in all inner frames, so as to break the
+    # reference cycle.
+    this_frame = sys._getframe(0)
+    refs = gc.get_referrers(frame)
+    while refs:
+        for frame in refs:
+            if frame is not this_frame and isinstance(frame, types.FrameType):
+                break
+        else:
+            # No frame found in referrers (finished?)
+            break
+        refs = None
+        # Clear the frame locals, to try and break the cycle (it is
+        # somewhere along the chain of execution frames).
+        frame.clear()
+        # To visit the inner frame, we need to find it among the
+        # referrers of this frame (while `frame.f_back` would let
+        # us visit the outer frame).
+        refs = gc.get_referrers(frame)
+    refs = frame = this_frame = None
+
+
+def _download_urllib(url, out_path):
+    from urllib.request import urlopen, Request
+    req = Request(url, headers={'User-Agent': 'pyarrow'})
+    with urlopen(req) as response:
+        with open(out_path, 'wb') as f:
+            f.write(response.read())
+
+
+def _download_requests(url, out_path):
+    import requests
+    with requests.get(url) as response:
+        with open(out_path, 'wb') as f:
+            f.write(response.content)
+
+
+def download_tzdata_on_windows():
+    r"""
+    Download and extract latest IANA timezone database into the
+    location expected by Arrow which is %USERPROFILE%\Downloads\tzdata.
     """
-    # Due to security issue in md5 and sha1, usedforsecurity
-    h = hashlib.new("md5", usedforsecurity=False)
+    if sys.platform != 'win32':
+        raise TypeError(f"Timezone database is already provided by {sys.platform}")
 
-    b = s.encode("utf-8") if isinstance(s, str) else s
+    import tarfile
 
-    h.update(b)
-    return h.hexdigest()
+    tzdata_url = "https://data.iana.org/time-zones/tzdata-latest.tar.gz"
+    tzdata_path = os.path.expandvars(r"%USERPROFILE%\Downloads\tzdata")
+    tzdata_compressed_path = os.path.join(tzdata_path, "tzdata.tar.gz")
+    windows_zones_url = "https://raw.githubusercontent.com/unicode-org/cldr/master/common/supplemental/windowsZones.xml"  # noqa
+    windows_zones_path = os.path.join(tzdata_path, "windowsZones.xml")
+    os.makedirs(tzdata_path, exist_ok=True)
 
+    # Try to download the files with requests and then fall back to urllib. This
+    # works around possible issues in certain older environment (GH-45295)
+    try:
+        import requests  # noqa: F401
+        download_fn = _download_requests
+    except ImportError:
+        download_fn = _download_urllib
 
-class AttributeDictionary(dict[Any, Any]):  # noqa: FURB189
-    """
-    A dictionary subclass that supports attribute-style access.
+    download_fn(tzdata_url, tzdata_compressed_path)
+    download_fn(windows_zones_url, windows_zones_path)
 
-    This class extends the functionality of a standard dictionary to allow items
-    to be accessed via attribute-style dot notation in addition to the traditional
-    key-based access. If a dictionary item is accessed and is itself a dictionary,
-    it is automatically wrapped in another `AttributeDictionary`, enabling recursive
-    attribute-style access.
-    """
+    assert os.path.exists(tzdata_compressed_path)
+    assert os.path.exists(windows_zones_path)
 
-    def __getattr__(self, key: str) -> Any:
-        try:
-            item = self.__getitem__(key)
-            return AttributeDictionary(item) if isinstance(item, dict) else item
-        except KeyError as err:
-            raise AttributeError(
-                f"'{type(self).__name__}' object has no attribute '{key}'"
-            ) from err
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        self[name] = value
-
-
-def in_sidebar(dg: DeltaGenerator) -> bool:
-    """Check if the DeltaGenerator is in the sidebar."""
-    return dg._active_dg._root_container == RootContainer.SIDEBAR
+    tarfile.open(tzdata_compressed_path).extractall(tzdata_path)
